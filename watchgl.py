@@ -8,19 +8,25 @@ from enum import Enum
 BGCOLOR_TRANSPARENT = -1
 
 
- class DisplayFormat(Enum):
+class DisplayFormat(Enum):
     RGB565 = 128
     RGB565_R = 129
-    RGB444 = 144
-    RGB666 = 176
-    RGB666_R = 177
+    #RGB444 = 144
+    #RGB666 = 176
+    #RGB666_R = 177
 
-    
+
+
+
 
 
 class ImageStream(Protocol):
     width: int
     height: int
+    auto_reset: bool
+    # Reset Stream, or restart it
+    def reset(self) -> None:
+        pass
     # Mark that all reading is done
     def done(self) -> None:
         pass
@@ -32,12 +38,16 @@ class ImageStream(Protocol):
         return -1
 
 
-
-class DisplayProtocol(Protocol):
+class DisplaySpec():
     width: int
     height: int
     format: DisplayFormat
-    
+
+
+
+class DisplayProtocol(Protocol):
+    spec: DisplaySpec
+
     linebuffer: memoryview
     linebuffer_size: int
 
@@ -89,7 +99,6 @@ class Component():
             self.dirty = True
     def set_var_q(self, k:str, v:Any) -> None:
         self._state[k] = v
-            
 
 
 class Screen():
@@ -176,18 +185,24 @@ _DUMMY_SCREEN:Screen = Screen(0, [])
 
 
 
-
-
-
 class VerticalCropStream():
     def __init__(self, instream:ImageStream, skip:int, height:int) -> None:
-        self.width = instream.width
+        self.width:int = instream.width
         if skip+height > instream.height:
             height = height-(skip+height-instream.height)
-        self.height = height
-        self._instream = instream
-        self._remaining = self.height*self.width
-        self._instream.skip_pixels(skip*self.width)
+        self.height:int = height
+        self.auto_reset:bool = instream.auto_reset
+        self._instream:ImageStream = instream
+
+        self._pixels_n:int = self.height*self.width
+        self._skip:int = skip*self.width
+
+        self._remaining:int = self._pixels_n
+        self._instream.skip_pixels(self._skip)
+    def reset(self):
+        self._instream.reset()
+        self._instream.skip_pixels(self._skip)
+        self._remaining:int = self._pixels_n
     def done(self) -> None:
         if self._remaining != -1:
             self._remaining = -1
@@ -213,14 +228,23 @@ class VerticalCropStream():
 
 class HorizontalCropStream():
     def __init__(self, instream:ImageStream, skip:int, width:int) -> None:
-        self.height = instream.height
+        self.height:int = instream.height
         if skip+width > instream.width:
             width = width-(skip+width-instream.width)
-        self.width = width
-        self._instream = instream
-        self._skip = instream.width-(skip+width)
-        self._remaining_in_line = width
-        self._remaining = self.height*self.width
+        self.width:int = width
+        self.auto_reset:bool = instream.auto_reset
+        self._instream:ImageStream = instream
+        self._pixels_n:int = self.height*self.width
+        self._skip:int = instream.width-(skip+width)
+
+        self._remaining_in_line:int = self.width
+        self._remaining:int = self._pixels_n
+        self._instream.skip_pixels(skip)
+
+    def reset(self) -> None:
+        self._instream.reset()
+        self._remaining_in_line:int = self.width
+        self._remaining:int = self._pixels_n
         self._instream.skip_pixels(skip)
     def done(self) -> None:
         if self._remaining != -1:
@@ -233,17 +257,19 @@ class HorizontalCropStream():
         if n > self._remaining:
             n = self._remaining
 
+	skip_total:int = 0
         while n > 0:
             if n >= self._remaining_in_line:
-                self._instream.skip_pixels(self._remaining_in_line+self._skip)
+		skip_total += self._remaining_in_line+self._skip
                 n -= self._remaining_in_line
                 self._remaining -= self._remaining_in_line
                 self._remaining_in_line = self.width
             else:
-                self._instream.skip_pixels(n)
+		skip_total += n
                 self._remaining_in_line -= n
                 self._remaining -= n
                 n = 0
+        self._instream.skip_pixels(skip_total)
     def read_pixels(self, buf:memoryview, n:int, offset:int) -> int:
         if self._remaining <= 0:
             self.done()
