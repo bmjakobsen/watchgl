@@ -100,13 +100,15 @@ class Component():
 
 
 class Screen():
-    def __init__(self, bgcolor:int, components:List['Component']):
+    def __init__(self, bgcolor:int, display_spec:DisplaySpec, components:List['Component']):
         ncomponents:List['Component'] = []
         if len(components) > 127:
             raise Exception("Too many components")
         cid:int = 1
         self.bg:int = bgcolor
         self.transparent:bool = False
+
+        self.display_spec:DisplaySpec = display_spec
 
         self.bounds_x0:int = -1
         self.bounds_y0:int = -1
@@ -183,8 +185,6 @@ _DUMMY_SCREEN:Screen = Screen(0, [])
 
 
 
-class WatchglException(Exception):
-    pass
 class EmptyImageStream(Exception):
     pass
 
@@ -202,10 +202,12 @@ class VerticalCropStream():
 
         self.remaining:int = self._pixels_n
         self._instream.skip_pixels(self._skip)
+        assert(self._instream.remaining >= self.remaining)
     def reset(self):
         self._instream.reset()
         self._instream.skip_pixels(self._skip)
         self.remaining:int = self._pixels_n
+        assert(self._instream.remaining >= self.remaining)
     def done(self) -> None:
         self.remaining = 0
         self.instream.done()
@@ -241,17 +243,21 @@ class HorizontalCropStream():
         self.auto_reset:bool = instream.auto_reset
         self._instream:ImageStream = instream
         self._pixels_n:int = self.height*self.width
+
+        self._skip_at_start:int = skip
         self._skip:int = instream.width-(skip+width)
 
         self.remaining:int = self._pixels_n
         self._remaining_in_line:int = self.width
-        self._instream.skip_pixels(skip)
+        assert(self._instream.remaining >= self.remaining+self.height*self._skip)
+        self._instream.skip_pixels(self._skip_at_start)
 
     def reset(self) -> None:
         self._instream.reset()
         self.remaining:int = self._pixels_n
         self._remaining_in_line:int = self.width
-        self._instream.skip_pixels(skip)
+        assert(self._instream.remaining >= self.remaining+self.height*self._skip)
+        self._instream.skip_pixels(self._skip_at_start)
     def done(self) -> None:
         self.remaining = 0
         self._instream.done()
