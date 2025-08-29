@@ -24,6 +24,7 @@ class ImageStream(Protocol):
     width: int
     height: int
     auto_reset: bool
+    remaining: int
     # Reset Stream, or restart it
     def reset(self) -> None:
         pass
@@ -47,9 +48,6 @@ class DisplaySpec():
 
 class DisplayProtocol(Protocol):
     spec: DisplaySpec
-
-    linebuffer: memoryview
-    linebuffer_size: int
 
     def fill(self, color:int, xy:Tuple[int, int], wh:Tuple[int, int]) -> None:
         pass
@@ -185,6 +183,11 @@ _DUMMY_SCREEN:Screen = Screen(0, [])
 
 
 
+class WatchglException(Exception):
+    pass
+class EmptyImageStream(Exception):
+    pass
+
 class VerticalCropStream():
     def __init__(self, instream:ImageStream, skip:int, height:int) -> None:
         self.width:int = instream.width
@@ -197,32 +200,35 @@ class VerticalCropStream():
         self._pixels_n:int = self.height*self.width
         self._skip:int = skip*self.width
 
-        self._remaining:int = self._pixels_n
+        self.remaining:int = self._pixels_n
         self._instream.skip_pixels(self._skip)
     def reset(self):
         self._instream.reset()
         self._instream.skip_pixels(self._skip)
-        self._remaining:int = self._pixels_n
+        self.remaining:int = self._pixels_n
     def done(self) -> None:
-        if self._remaining != -1:
-            self._remaining = -1
-            self._instream.done()
+        self.remaining = 0
+        self.instream.done()
     def skip_pixels(self, n:int) -> None:
-        if self._remaining <= 0:
-            self.done()
-            return
-        if n > self._remaining:
-            n = self._remaining
+        remaining:int = self.remaining
+        if n > remaining:
+            n = remaining
         self._instream.skip_pixels(n)
-        self._remaining -= n
-    def read_pixels(self, buf:memoryview, n:int, offset:int) -> int:
-        if self._remaining <= 0:
+        remaining -= n
+        self.remaining = remaining
+        if remaining == 0:
             self.done()
-            return 0
-        if n > self._remaining:
-            n = self._remaining
+    def read_pixels(self, buf:memoryview, n:int, offset:int) -> int:
+        remaining:int = self.remaining
+        if remaining == 0:
+            raise EmptyImageStream()
+        if n > remaining:
+            n = remaining
         r = self._instream.read_pixels(buf, n, offset)
-        self._remaining -= r
+        remaining -= r
+        self.remaining = remaining
+        if remaining == 0:
+            self.done()
         return r
 
 
@@ -237,58 +243,71 @@ class HorizontalCropStream():
         self._pixels_n:int = self.height*self.width
         self._skip:int = instream.width-(skip+width)
 
+        self.remaining:int = self._pixels_n
         self._remaining_in_line:int = self.width
-        self._remaining:int = self._pixels_n
         self._instream.skip_pixels(skip)
 
     def reset(self) -> None:
         self._instream.reset()
+        self.remaining:int = self._pixels_n
         self._remaining_in_line:int = self.width
-        self._remaining:int = self._pixels_n
         self._instream.skip_pixels(skip)
     def done(self) -> None:
-        if self._remaining != -1:
-            self._remaining = -1
-            self._instream.done()
+        self.remaining = 0
+        self._instream.done()
     def skip_pixels(self, n:int) -> None:
-        if self._remaining <= 0:
-            self.done()
-            return
-        if n > self._remaining:
-            n = self._remaining
+        remaining:int = self.remaining
+        if remaining == 0:
+            raise EmptyImageStream()
+        if n > remaining:
+            n = remaining
 
-	skip_total:int = 0
+        skip_total:int = 0
+        skip:int = self._skip
+        rem_in_line:int = self._remaining_in_line
+        width:int = self.width
         while n > 0:
-            if n >= self._remaining_in_line:
-		skip_total += self._remaining_in_line+self._skip
-                n -= self._remaining_in_line
-                self._remaining -= self._remaining_in_line
-                self._remaining_in_line = self.width
+            if n >= rem_in_line:
+                skip_total += rem_in_line+skip
+                n -= rem_in_line
+                remaining -= rem_in_line
+                rem_in_line = width
             else:
-		skip_total += n
-                self._remaining_in_line -= n
-                self._remaining -= n
+                skip_total += n
+                rem_in_line -= n
+                remaining -= n
                 n = 0
         self._instream.skip_pixels(skip_total)
-    def read_pixels(self, buf:memoryview, n:int, offset:int) -> int:
-        if self._remaining <= 0:
+        self.remaining = remaining
+        self._remaining_in_line = rem_in_line
+        if remaining == 0:
             self.done()
-            return 0
-        if n > self._remaining:
-            n = self._remaining
-        read_bytes = 0
+    def read_pixels(self, buf:memoryview, n:int, offset:int) -> int:
+        remaining:int = self.remaining
+        if remaining == 0:
+            raise EmptyImageStream()
+        if n > remaining:
+            n = remaining
+        read_bytes:int = 0
+        rem_in_line:int = self._remaining_in_line
+        skip:int = self._skip
+        width:int = self.width
         while n > 0:
-            if n >= self._remaining_in_line:
-                r = self._instream.read_pixels(buf, self._remaining_in_line, offset+read_bytes)
+            if n >= rem_in_line:
+                r = self._instream.read_pixels(buf, rem_in_line, offset+read_bytes)
                 read_bytes += r
-                n -= self._remaining_in_line
-                self._instream.skip_pixels(self._skip)
-                self._remaining -= self._remaining_in_line
-                self._remaining_in_line = self.width
+                n -= rem_in_line
+                self._instream.skip_pixels(skip)
+                remaining -= rem_in_line
+                rem_in_line = width
             else:
                 r = self._instream.read_pixels(buf, n, offset+read_bytes)
                 read_bytes += r
-                self._remaining_in_line -= n
-                self._remaining -= n
+                rem_in_line -= n
+                remaining -= n
                 n = 0
+        self.remaining = remaining
+        self._remaining_in_line = rem_in_line
+        if remaining == 0:
+            self.done()
         return read_bytes
