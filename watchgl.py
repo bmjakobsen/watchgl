@@ -404,8 +404,8 @@ class WatchGraphics():
             if last_y == y0 and remaining_repeats > 0:
                 if sx < 0:
                     buffer[pos2+0] -= 1
-                buffer[(pos2+2] += 1
-                last_y = y0
+                buffer[pos2+2] += 1
+                last_x = x0
                 remaining_repeats -= 1
             elif last_x == x0 and remaining_repeats > 0:
                 if sy < 0:
