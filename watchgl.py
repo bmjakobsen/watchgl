@@ -365,19 +365,19 @@ class WatchGraphics():
         if dx == 0 and dy == 0:
             display.wgl_fill(color, x0, y0, width, width)
             return
-        if dy == 0:
+        elif dy == 0:
             if x0 > x1:
                 x2 = x0
                 x0 = x1
                 x1 = x2
-            display.wgl_fill(color, x0, y0, abs(dx)+width, width)
+            display.wgl_fill(color, x0, y0, dx+width, width)
             return
-        if dx == 0:
+        elif dx == 0:
             if y0 > y1:
                 y2 = y0
                 y0 = y1
                 y1 = y2
-            display.wgl_fill(color, x0, y0, width, abs(dy)+width)
+            display.wgl_fill(color, x0, y0, width, (-dy)+width)
             return
 
 
