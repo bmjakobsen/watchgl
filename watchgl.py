@@ -43,17 +43,26 @@ class DisplaySpec():
     width: int
     height: int
     format: DisplayFormat
+    def __init__(self, width:int, height:int, format:DisplayFormat) -> None:
+        self.width:int = width
+        self.height:int = height
+        self.format:int = format
+        self.max_dimension:int = width
+        self.min_dimension:int = height
+        if height > width:
+        self.max_dimension:int = height
+        self.min_dimension:int = width
 
 
 
 class DisplayProtocol(Protocol):
     spec: DisplaySpec
 
-    def fill(self, color:int, x:int, y:int, width:int, height:int) -> None:
+    def wgl_fill(self, color:int, x:int, y:int, width:int, height:int) -> None:
         pass
-    def fill_seq(self, color:int, xywh:List[Tuple[int, int, int, int]]) -> None:
+    def wgl_fill_seq(self, color:int, x:int, y:int, data:memoryview, n:int) -> None:
         pass
-    def blit(self, data:ImageStream, x:int, y:int) -> None:
+    def wgl_blit(self, data:ImageStream, x:int, y:int) -> None:
         pass
 
 
@@ -317,3 +326,116 @@ class HorizontalCropStream():
         if remaining == 0:
             self.done()
         return read_bytes
+
+
+
+
+
+
+
+
+
+class WatchGraphics():
+    def __init__(self, display:DisplayProtocol) -> None:
+        self.display:DisplayProtocol = display
+        self.font = None
+
+        draw_line_buffer:array = array('b')
+        for _ in range(display.spec.min_dimension*4):
+            draw_line_buffer.append(0)
+        self._draw_line_buffer:memoryview = memoryview(draw_line_buffer)
+
+
+    def draw_line(self, color:int, width:int, x0:int, y0:int, x1:int, y1:int) -> None:
+        display = self.display
+
+        ltoff:int = (width-1)//2
+        # Line Thickness offset
+        x0 -= ltoff
+        y0 -= ltoff
+        x1 -= ltoff
+        y1 -= ltoff
+
+        start_x:int = x0
+        start_y:int = y0
+
+        dx = abs(x1 - x0)
+        dy = -abs(y1 - y0)
+
+        if dx == 0 and dy == 0:
+            display.wgl_fill(color, x0, y0, width, width)
+            return
+        if dy == 0:
+            if x0 > x1:
+                x2 = x0
+                x0 = x1
+                x1 = x2
+            display.wgl_fill(color, x0, y0, abs(dx)+width, width)
+            return
+        if dx == 0:
+            if y0 > y1:
+                y2 = y0
+                y0 = y1
+                y1 = y2
+            display.wgl_fill(color, x0, y0, width, abs(dy)+width)
+            return
+
+
+        # Direction to move, x0-x1 cant be zero, same for y0-y1
+        sx:int = 1 if (x0 < x1) else -1
+        sy:int = 1 if (y0 < y1) else -1
+
+
+        buffer:memoryview = self._draw_line_buffer
+        pos:int = 0
+        pos2:int = pos-4
+
+        error:int = (dx + dy)<<1
+        last_x:int = -1
+        last_y:int = -1
+        x_offset:int = 0
+        y_offset:int = 0
+
+        dy_x2:int = dy<<1
+        dx_x2:int = dx<<1
+
+        remaining_repeats = 63
+        while True:
+            if last_y == y0 and remaining_repeats > 0:
+                if sx < 0:
+                    buffer[pos2+0] -= 1
+                buffer[(pos2+2] += 1
+                last_y = y0
+                remaining_repeats -= 1
+            elif last_x == x0 and remaining_repeats > 0:
+                if sy < 0:
+                    buffer[pos2+1] -= 1
+                buffer[pos2+3] += 1
+                last_y = y0
+                remaining_repeats -= 1
+            else:
+                buffer[pos] = x_offset
+                buffer[pos+1] = y_offset
+                buffer[pos+2] = width
+                buffer[pos+3] = width
+                pos += 4
+                pos2 += 4
+                x_offset = 0
+                y_offset = 0
+                last_x = x0
+                last_y = y0
+                remaining_repeats = 63
+            if error >= dy:
+                if x0 == x1:
+                    break
+                error += dy_x2
+                x0 += sx
+                x_offset += sx
+            if error <= dx:
+                if y0 == y1:
+                    break
+                error += dx_x2
+                y0 += sy
+                y_offset += sy
+        n_fills:int = pos>>2
+        display.wgl_fill_seq(color, start_x, start_y, buffer, n_fills)
