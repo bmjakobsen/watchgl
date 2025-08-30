@@ -49,20 +49,20 @@ class DisplaySpec():
 class DisplayProtocol(Protocol):
     spec: DisplaySpec
 
-    def fill(self, color:int, xy:Tuple[int, int], wh:Tuple[int, int]) -> None:
+    def fill(self, color:int, x:int, y:int, width:int, height:int) -> None:
         pass
     def fill_seq(self, color:int, xywh:List[Tuple[int, int, int, int]]) -> None:
         pass
-    def blit(self, data:ImageStream, xy:Tuple[int, int]) -> None:
+    def blit(self, data:ImageStream, x:int, y:int) -> None:
         pass
 
 
 class Component():
-    def __init__(self, xywh:Tuple[int,int,int,int], draw:Callable[["Component", "DisplayProtocol"], None]):
-        self.x:int = xywh[0]
-        self.y:int = xywh[1]
-        self.width:int = xywh[2]
-        self.height:int = xywh[3]
+    def __init__(self, x:int, y:int, width:int, height:int, draw:Callable[["Component", "DisplayProtocol"], None]):
+        self.x:int = x
+        self.y:int = y
+        self.width:int = width
+        self.height:int = height
         self.bg:int = BGCOLOR_TRANSPARENT
 
         self.weight:int = self.width*self.height
