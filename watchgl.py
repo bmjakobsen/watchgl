@@ -346,11 +346,18 @@ class WatchGraphics():
         self._draw_line_buffer:memoryview = memoryview(draw_line_buffer)
 
 
+    # Draw a line, with a given thickness and color, between the start and endpoints,
+    # Special cases like perfetly orthogonal lines are handled seperately
+    # Other Lines are drawn using bresenhams line algorithm
+    # with the difference that multiple oeprations to draw a single pixel are coalesced
+    # into bigger operations to draw orthogonal lines.
     def draw_line(self, color:int, width:int, x0:int, y0:int, x1:int, y1:int) -> None:
         display = self.display
 
-        ltoff:int = (width-1)//2
         # Line Thickness offset
+        ltoff:int = (width-1)//2
+
+        # Correct using line thickness offset
         x0 -= ltoff
         y0 -= ltoff
         x1 -= ltoff
@@ -362,9 +369,11 @@ class WatchGraphics():
         dx = abs(x1 - x0)
         dy = -abs(y1 - y0)
 
+        # Check if line ends where it starts
         if dx == 0 and dy == 0:
             display.wgl_fill(color, x0, y0, width, width)
             return
+        # Line doesnt span vertically, meaning its horizontal so it can be drawn using a single fill operation
         elif dy == 0:
             if x0 > x1:
                 x2 = x0
@@ -372,6 +381,7 @@ class WatchGraphics():
                 x1 = x2
             display.wgl_fill(color, x0, y0, dx+width, width)
             return
+        # Line doesnt span horizontally, meaning its vertical, so it can be drawn with a single fill operation
         elif dx == 0:
             if y0 > y1:
                 y2 = y0
@@ -388,38 +398,43 @@ class WatchGraphics():
 
         buffer:memoryview = self._draw_line_buffer
         pos:int = 0
-        pos2:int = pos-4
+        remaining_repeats = 0           # Number of fills that can be coalesced into the last fill
 
-        error:int = (dx + dy)<<1
+
+        # Last X and y coordinates drawn to, used for coalescing individual draws
         last_x:int = -1
         last_y:int = -1
+
+        # Offset to the last start of a fill area
         x_offset:int = 0
         y_offset:int = 0
 
-        dy_x2:int = dy<<1
         dx_x2:int = dx<<1
+        dy_x2:int = dy<<1
 
-        remaining_repeats = 63
+        error:int = dx_x2+dy_x2
         while True:
+            # If coalescing fills is allowed, and the current pixel shares the y coordinate with the last pixel
             if last_y == y0 and remaining_repeats > 0:
                 if sx < 0:
-                    buffer[pos2+0] -= 1
-                buffer[pos2+2] += 1
+                    buffer[pos-4+0] -= 1
+                buffer[pos-4+2] += 1
                 last_x = x0
                 remaining_repeats -= 1
+            # If coalescing fills is allowed, and the current pixel shares the x coordinate with the last pixel
             elif last_x == x0 and remaining_repeats > 0:
                 if sy < 0:
-                    buffer[pos2+1] -= 1
-                buffer[pos2+3] += 1
+                    buffer[pos-4+1] -= 1
+                buffer[pos-4+3] += 1
                 last_y = y0
                 remaining_repeats -= 1
+            # Add new fill operation to buffer
             else:
                 buffer[pos] = x_offset
                 buffer[pos+1] = y_offset
                 buffer[pos+2] = width
                 buffer[pos+3] = width
                 pos += 4
-                pos2 += 4
                 x_offset = 0
                 y_offset = 0
                 last_x = x0
