@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 #import micropython
 from typing import Protocol, Any, Tuple, List, Callable, Dict, Optional
 from array import array
@@ -50,8 +51,8 @@ class DisplaySpec():
         self.max_dimension:int = width
         self.min_dimension:int = height
         if height > width:
-        self.max_dimension:int = height
-        self.min_dimension:int = width
+            self.max_dimension:int = height
+            self.min_dimension:int = width
 
 
 
@@ -64,6 +65,22 @@ class DisplayProtocol(Protocol):
         pass
     def wgl_blit(self, data:ImageStream, x:int, y:int) -> None:
         pass
+
+class DummyDisplay():
+    def __init__(self, width:int, height:int, format:DisplayFormat=DisplayFormat.RGB565):
+        self.spec = DisplaySpec(width, height, format)
+    def wgl_fill(self, color:int, x:int, y:int, width:int, height:int) -> None:
+        print("FILL "+hex(color)+", X:"+str(x)+", Y:"+str(y)+", W:"+str(width)+", H:"+str(height))
+    def wgl_fill_seq(self, color:int, x:int, y:int, data:memoryview, n:int) -> None:
+        print("FILL SEQ "+hex(color)+":")
+        nx4:int = n<<2
+        for i in range(0, nx4, 4):
+            x += data[i+0]
+            y += data[i+1]
+            print("  X:"+str(x)+", Y:"+str(y)+", W:"+str(data[i+2])+", H:"+str(data[i+3]))
+    def wgl_blit(self, data:ImageStream, x:int, y:int) -> None:
+        pass
+
 
 
 class Component():
@@ -188,7 +205,8 @@ class Screen():
                 com.draw(com, display)
             self.update_array[byti] = 0
         self.update_bitfield = 0
-_DUMMY_SCREEN:Screen = Screen(0, [])
+_DUMMY_DISPLAY_SPEC = DisplaySpec(0, 0, DisplayFormat.RGB565)
+_DUMMY_SCREEN:Screen = Screen(0, _DUMMY_DISPLAY_SPEC, [])
 
 
 
@@ -340,10 +358,47 @@ class WatchGraphics():
         self.display:DisplayProtocol = display
         self.font = None
 
+        self._window_x:int = 0
+        self._window_y:int = 0
+        self._window_width:int = self.display.spec.width
+        self._window_height:int = self.display.spec.height
+        self._window_max_x = self.display.spec.width-1
+        self._window_max_y = self.display.spec.height-1
+        self._shift_y:int = 0
+
         draw_line_buffer:array = array('b')
         for _ in range(display.spec.min_dimension*4):
             draw_line_buffer.append(0)
         self._draw_line_buffer:memoryview = memoryview(draw_line_buffer)
+
+
+    def _set_window(self, x:int, y:int, width:int, height:int, shift_x:int, shift_y:int) -> None:
+        if shift_x != 0:
+            raise Exception("Shifting contents by x is currently not supported")
+        self._window_x = x
+        self._window_y = y
+        self._window_width = width
+        self._window_height = height
+        self._shift_y = shift_y
+
+
+    def fill(self, color:int, x:int, y:int, width:int, height:int) -> None:
+        y += self._shift_y
+        if y < 0:
+            height += y
+            y = 0
+        if x < 0:
+            width += x
+            x = 0
+        max_y:int = y+height-1
+        max_x:int = x+width-1
+        if max_x >= self._window_width:
+            width += (self._window_width-1)-max_x
+        if max_y >= self._window_height:
+            height += (self._window_height-1)-max_y
+        if width <= 0 or height <= 0:
+            return
+        self.display.wgl_fill(color, self._window_x+x, self._window_y+y, width, height)
 
 
     # Draw a line, with a given thickness and color, between the start and endpoints,
@@ -363,15 +418,15 @@ class WatchGraphics():
         x1 -= ltoff
         y1 -= ltoff
 
-        start_x:int = x0
-        start_y:int = y0
+        start_x:int = x0+self._window_x
+        start_y:int = y0+self._window_y
 
         dx = abs(x1 - x0)
         dy = -abs(y1 - y0)
 
         # Check if line ends where it starts
         if dx == 0 and dy == 0:
-            display.wgl_fill(color, x0, y0, width, width)
+            self.fill(color, x0, y0, width, width)
             return
         # Line doesnt span vertically, meaning its horizontal so it can be drawn using a single fill operation
         elif dy == 0:
@@ -379,7 +434,7 @@ class WatchGraphics():
                 x2 = x0
                 x0 = x1
                 x1 = x2
-            display.wgl_fill(color, x0, y0, dx+width, width)
+            self.fill(color, x0, y0, dx+width, width)
             return
         # Line doesnt span horizontally, meaning its vertical, so it can be drawn with a single fill operation
         elif dx == 0:
@@ -387,8 +442,14 @@ class WatchGraphics():
                 y2 = y0
                 y0 = y1
                 y1 = y2
-            display.wgl_fill(color, x0, y0, width, (-dy)+width)
+            self.fill(color, x0, y0, width, (-dy)+width)
             return
+
+
+        # Shift content by y
+        y0 += self._shift_y
+        y1 += self._shift_y
+
 
 
         # Direction to move, x0-x1 cant be zero, same for y0-y1
@@ -401,10 +462,6 @@ class WatchGraphics():
         remaining_repeats = 0           # Number of fills that can be coalesced into the last fill
 
 
-        # Last X and y coordinates drawn to, used for coalescing individual draws
-        last_x:int = -1
-        last_y:int = -1
-
         # Offset to the last start of a fill area
         x_offset:int = 0
         y_offset:int = 0
@@ -413,33 +470,59 @@ class WatchGraphics():
         dy_x2:int = dy<<1
 
         error:int = dx_x2+dy_x2
+        window_width:int = self._window_width
+        window_height:int = self._window_height
         while True:
-            # If coalescing fills is allowed, and the current pixel shares the y coordinate with the last pixel
-            if last_y == y0 and remaining_repeats > 0:
-                if sx < 0:
-                    buffer[pos-4+0] -= 1
-                buffer[pos-4+2] += 1
-                last_x = x0
+            width_change:int = 0
+            height_change:int = 0
+
+            max_width:int = window_width-x0
+            max_height:int = window_height-y0
+            max_y:int = y0+width-1
+            if x0 < 0:
+                x_offset -= x0
+                width_change += x0
+            if width > max_width:
+                width_change += max_width-width
+            if y0 < 0:
+                y_offset -= y0
+                height_change += y0
+            if width > max_height:
+                height_change += max_height-width
+
+            rwidth:int = width+width_change
+            rheight:int = width+height_change
+
+            if rwidth <= 0 or rheight <= 0:
+                print(0)
+                remaining_repeats = 0
+            elif y_offset == 0 and rheight == buffer[pos-4+3] and remaining_repeats > 0:
+                print(2)
+                if x_offset < 0:
+                    buffer[pos-4+0] += x_offset
+                    buffer[pos-4+2] -= x_offset
+                else:
+                    buffer[pos-4+2] += x_offset
                 remaining_repeats -= 1
-            # If coalescing fills is allowed, and the current pixel shares the x coordinate with the last pixel
-            elif last_x == x0 and remaining_repeats > 0:
-                if sy < 0:
-                    buffer[pos-4+1] -= 1
-                buffer[pos-4+3] += 1
-                last_y = y0
+            elif x_offset == 0 and rwidth == buffer[pos-4+2] and remaining_repeats > 0:
+                print(3)
+                if y_offset < 0:
+                    buffer[pos-4+1] += y_offset
+                    buffer[pos-4+3] -= y_offset
+                else:
+                    buffer[pos-4+3] += y_offset
                 remaining_repeats -= 1
-            # Add new fill operation to buffer
             else:
+                print(1)
                 buffer[pos] = x_offset
                 buffer[pos+1] = y_offset
-                buffer[pos+2] = width
-                buffer[pos+3] = width
+                buffer[pos+2] = rwidth
+                buffer[pos+3] = rheight
                 pos += 4
                 x_offset = 0
                 y_offset = 0
-                last_x = x0
-                last_y = y0
                 remaining_repeats = 63
+
             if error >= dy:
                 if x0 == x1:
                     break
@@ -453,4 +536,15 @@ class WatchGraphics():
                 y0 += sy
                 y_offset += sy
         n_fills:int = pos>>2
+        print(n_fills)
         display.wgl_fill_seq(color, start_x, start_y, buffer, n_fills)
+
+
+
+
+if __name__ == '__main__':
+    dis = DummyDisplay(240, 240)
+    dg = WatchGraphics(dis)
+    dg.draw_line(0, 1,  0, 1,  0, 1)
+    dg.draw_line(0, 1,  0, 1,  6, 4)
+    dg.draw_line(0, 3,  -1, -1,  6, 4)
