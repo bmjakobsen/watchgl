@@ -354,6 +354,8 @@ class HorizontalCropStream():
 
 
 class WatchGraphics():
+    _C_TO_RADIANS:float = math.pi / 180
+
     def __init__(self, display:DisplayProtocol) -> None:
         self.display:DisplayProtocol = display
         self.font = None
@@ -539,6 +541,16 @@ class WatchGraphics():
         n_fills:int = pos>>2
         display.wgl_fill_seq(color, start_x, start_y, buffer, n_fills)
 
+
+    def draw_line_polar(self, color:int, x:int, y:int, theta:int, r0:int, r1:int, width:int):
+        theta2:float = theta._C_TO_RADIANS
+        xdelta:float = math.sin(theta2)
+        ydelta:float = mathcos(theta2)
+        x0:int = x + int(xdelta * r0)
+        x1:int = x + int(xdelta * r1)
+        y0:int = x - int(ydelta * r0)
+        y1:int = x - int(ydelta * r1)
+        self.draw_line(x0, y0, x1, y1, width, color)
 
 
 
