@@ -462,12 +462,11 @@ class WatchGraphics():
         remaining_repeats = 0           # Number of fills that can be coalesced into the last fill
 
 
-        # Offset to the last start of a fill area
-        x_offset:int = 0
-        y_offset:int = 0
-
         dx_x2:int = dx<<1
         dy_x2:int = dy<<1
+
+        last_x0 = x0
+        last_y0 = y0
 
         error:int = dx_x2+dy_x2
         window_width:int = self._window_width
@@ -479,25 +478,29 @@ class WatchGraphics():
             max_width:int = window_width-x0
             max_height:int = window_height-y0
             max_y:int = y0+width-1
-            if x0 < 0:
-                x_offset -= x0
-                width_change += x0
+
+            x02:int = x0
+            y02:int = y0
+
+            if x02 < 0:
+                x02 = 0
+                width_change += x02
             if width > max_width:
                 width_change += max_width-width
-            if y0 < 0:
-                y_offset -= y0
-                height_change += y0
+            if y02 < 0:
+                y02 = 0
+                height_change += y02
             if width > max_height:
                 height_change += max_height-width
 
             rwidth:int = width+width_change
             rheight:int = width+height_change
 
+            x_offset:int = x02-last_x0
+            y_offset:int = y02-last_y0
             if rwidth <= 0 or rheight <= 0:
-                print(0)
                 remaining_repeats = 0
             elif y_offset == 0 and rheight == buffer[pos-4+3] and remaining_repeats > 0:
-                print(2)
                 if x_offset < 0:
                     buffer[pos-4+0] += x_offset
                     buffer[pos-4+2] -= x_offset
@@ -505,7 +508,6 @@ class WatchGraphics():
                     buffer[pos-4+2] += x_offset
                 remaining_repeats -= 1
             elif x_offset == 0 and rwidth == buffer[pos-4+2] and remaining_repeats > 0:
-                print(3)
                 if y_offset < 0:
                     buffer[pos-4+1] += y_offset
                     buffer[pos-4+3] -= y_offset
@@ -513,30 +515,28 @@ class WatchGraphics():
                     buffer[pos-4+3] += y_offset
                 remaining_repeats -= 1
             else:
-                print(1)
                 buffer[pos] = x_offset
                 buffer[pos+1] = y_offset
                 buffer[pos+2] = rwidth
                 buffer[pos+3] = rheight
                 pos += 4
-                x_offset = 0
-                y_offset = 0
+                last_x0 = x02
+                last_y0 = y02
                 remaining_repeats = 63
 
+            error_change:int = 0
             if error >= dy:
                 if x0 == x1:
                     break
-                error += dy_x2
+                error_change += dy_x2
                 x0 += sx
-                x_offset += sx
             if error <= dx:
                 if y0 == y1:
                     break
-                error += dx_x2
+                error_change += dx_x2
                 y0 += sy
-                y_offset += sy
+            error += error_change
         n_fills:int = pos>>2
-        print(n_fills)
         display.wgl_fill_seq(color, start_x, start_y, buffer, n_fills)
 
 
