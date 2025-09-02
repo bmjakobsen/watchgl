@@ -3,6 +3,7 @@
 from typing import Protocol, Any, Tuple, List, Callable, Dict, Optional
 from array import array
 from enum import Enum
+import math
 
 
 
@@ -38,6 +39,30 @@ class ImageStream(Protocol):
     # Read n Pixels, into the buffer at the given offset, returns number of pixels read. Offset is in pixels
     def read_pixels(self, buf:memoryview, n:int, offset:int) -> int:
         return -1
+    def info(self) -> str:
+        return ""
+
+class DummyImageStream():
+    def __init__(self, width:int, height:int, auto_reset:bool=True) -> None:
+        self.width:int = width
+        self.height:int = height
+        self.auto_reset = auto_reset
+        self.remaining = self.width*self.height
+    def reset(self) -> None:
+        self.remaining = self.width*self.height
+    def done(self) -> None:
+        self.remaining = 0
+    def skip_pixels(self, n:int) -> None:
+        if n > self.remaining:
+            n = self.remaining
+        self.remaining -= n
+    def read_pixels(self, buf:memoryview, n:int, offset:int) -> int:
+        if n > self.remaining:
+            n = self.remaining
+        self.remaining -= n
+        return n
+    def info(self) -> str:
+        return "DUMMY_STREAM("+str(self.width)+", "+str(self.height)+")"
 
 
 class DisplaySpec():
@@ -63,8 +88,9 @@ class DisplayProtocol(Protocol):
         pass
     def wgl_fill_seq(self, color:int, x:int, y:int, data:memoryview, n:int) -> None:
         pass
-    def wgl_blit(self, data:ImageStream, x:int, y:int) -> None:
+    def wgl_blit(self, image:ImageStream, x:int, y:int) -> None:
         pass
+
 
 class DummyDisplay():
     def __init__(self, width:int, height:int, format:DisplayFormat=DisplayFormat.RGB565):
@@ -78,8 +104,9 @@ class DummyDisplay():
             x += data[i+0]
             y += data[i+1]
             print("  X:"+str(x)+", Y:"+str(y)+", W:"+str(data[i+2])+", H:"+str(data[i+3]))
-    def wgl_blit(self, data:ImageStream, x:int, y:int) -> None:
-        pass
+    def wgl_blit(self, image:ImageStream, x:int, y:int) -> None:
+        print("BLIT IMAGE:    X:"+str(x)+", Y:"+str(y)+", W:"+str(image.width)+", H:"+str(image.height))
+        print("  "+image.info())
 
 
 
@@ -224,6 +251,8 @@ class VerticalCropStream():
         self.auto_reset:bool = instream.auto_reset
         self._instream:ImageStream = instream
 
+        self._skip_lines:int = skip
+
         self._pixels_n:int = self.height*self.width
         self._skip:int = skip*self.width
 
@@ -259,6 +288,8 @@ class VerticalCropStream():
         if remaining == 0:
             self.done()
         return r
+    def info(self) -> str:
+        return "VERTICAL_CROP_STREAM("+str(self._skip_lines)+", "+str(self.height)+", "+self._instream.info()+")"
 
 
 class HorizontalCropStream():
@@ -344,6 +375,8 @@ class HorizontalCropStream():
         if remaining == 0:
             self.done()
         return read_bytes
+    def info(self) -> str:
+        return "HORIZONTAL_CROP_STREAM("+str(self._skip_at_start)+", "+str(self.width)+", "+self._instream.info()+")"
 
 
 
@@ -383,6 +416,38 @@ class WatchGraphics():
         self._window_height = height
         self._shift_y = shift_y
 
+
+    def blit(self, image:ImageStream, x:int, y:int):
+        y += self._shift_y
+        skip_lines:int = 0
+        if y < 0:
+            skip_lines -= y
+        reduce_by_lines:int = skip_lines
+        if y+image.height > self._window_height:
+            reduce_by_lines += (y+image.height)-self._window_height
+
+        skip_cols:int = 0
+        if x < 0:
+            skip_cols -= x
+        reduce_by_cols:int = skip_cols
+        if x+image.width > self._window_width:
+            reduce_by_cols += (x+image.width)-self._window_width
+
+        if reduce_by_lines == 0 and reduce_by_cols == 0:
+            self.display.wgl_blit(image, x, y)
+            return
+
+        if reduce_by_cols > 0:
+            croppedx:ImageStream = HorizontalCropStream(image, skip_cols, image.width-reduce_by_cols)
+            image = croppedx
+            x += skip_cols
+
+        if reduce_by_lines > 0:
+            croppedy:ImageStream = VerticalCropStream(image, skip_lines, image.height-reduce_by_lines)
+            image = croppedy
+            y += skip_lines
+
+        self.display.wgl_blit(image, x, y)
 
     def fill(self, color:int, x:int, y:int, width:int, height:int) -> None:
         y += self._shift_y
@@ -560,3 +625,5 @@ if __name__ == '__main__':
     dg.draw_line(0, 1,  0, 1,  0, 1)
     dg.draw_line(0, 1,  0, 1,  6, 4)
     dg.draw_line(0, 3,  -1, -1,  6, 4)
+    img = DummyImageStream(240, 240)
+    dg.blit(img, 10, 10)
