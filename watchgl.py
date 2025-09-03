@@ -250,6 +250,7 @@ class VerticalCropStream():
         self.height:int = height
         self.auto_reset:bool = instream.auto_reset
         self._instream:ImageStream = instream
+        #self._instream.reset()
 
         self._skip_lines:int = skip
 
@@ -266,7 +267,7 @@ class VerticalCropStream():
         assert(self._instream.remaining >= self.remaining)
     def done(self) -> None:
         self.remaining = 0
-        self.instream.done()
+        self._instream.done()
     def skip_pixels(self, n:int) -> None:
         remaining:int = self.remaining
         if n > remaining:
@@ -300,6 +301,7 @@ class HorizontalCropStream():
         self.width:int = width
         self.auto_reset:bool = instream.auto_reset
         self._instream:ImageStream = instream
+        #self._instream.reset()
         self._pixels_n:int = self.height*self.width
 
         self._skip_at_start:int = skip
@@ -393,12 +395,11 @@ class WatchGraphics():
         self.display:DisplayProtocol = display
         self.font = None
 
+        self.width:int = self.display.spec.width
+        self.height:int = self.display.spec.height
         self._window_x:int = 0
         self._window_y:int = 0
-        self._window_width:int = self.display.spec.width
-        self._window_height:int = self.display.spec.height
-        self._window_max_x = self.display.spec.width-1
-        self._window_max_y = self.display.spec.height-1
+
         self._shift_y:int = 0
 
         draw_line_buffer:array = array('b')
@@ -406,14 +407,17 @@ class WatchGraphics():
             draw_line_buffer.append(0)
         self._draw_line_buffer:memoryview = memoryview(draw_line_buffer)
 
+        self._crop_v_stream:ImageStream = VerticalCropStream(DummyImageStream(1, 1), 0, 1)
+        self._crop_h_stream:ImageStream = HorizontalCropStream(DummyImageStream(1, 1), 0, 1)
+
 
     def _set_window(self, x:int, y:int, width:int, height:int, shift_x:int, shift_y:int) -> None:
         if shift_x != 0:
             raise Exception("Shifting contents by x is currently not supported")
         self._window_x = x
         self._window_y = y
-        self._window_width = width
-        self._window_height = height
+        self.width = width
+        self.height = height
         self._shift_y = shift_y
 
 
@@ -423,15 +427,15 @@ class WatchGraphics():
         if y < 0:
             skip_lines -= y
         reduce_by_lines:int = skip_lines
-        if y+image.height > self._window_height:
-            reduce_by_lines += (y+image.height)-self._window_height
+        if y+image.height > self.height:
+            reduce_by_lines += (y+image.height)-self.height
 
         skip_cols:int = 0
         if x < 0:
             skip_cols -= x
         reduce_by_cols:int = skip_cols
-        if x+image.width > self._window_width:
-            reduce_by_cols += (x+image.width)-self._window_width
+        if x+image.width > self.width:
+            reduce_by_cols += (x+image.width)-self.width
 
         if reduce_by_lines == 0 and reduce_by_cols == 0:
             self.display.wgl_blit(image, x, y)
@@ -441,7 +445,9 @@ class WatchGraphics():
             new_height:int = image.height-reduce_by_lines
             if new_height <= 0:
                 return
-            croppedy:ImageStream = VerticalCropStream(image, skip_lines, new_height)
+            croppedy:ImageStream = self._crop_v_stream
+            croppedy.reset()
+            croppedy.__init__(image, skip_lines, new_height)
             image = croppedy
             y += skip_lines
 
@@ -449,11 +455,15 @@ class WatchGraphics():
             new_width:int = image.width-reduce_by_cols
             if new_width <= 0:
                 return
-            croppedx:ImageStream = HorizontalCropStream(image, skip_cols, new_width)
+            croppedx:ImageStream = self._crop_h_stream
+            croppedx.reset()
+            croppedx.__init__(image, skip_cols, new_width)
             image = croppedx
             x += skip_cols
 
         self.display.wgl_blit(image, x, y)
+        if image.auto_reset:
+            image.reset()
 
     def fill(self, color:int, x:int, y:int, width:int, height:int) -> None:
         y += self._shift_y
@@ -465,10 +475,10 @@ class WatchGraphics():
             x = 0
         max_y:int = y+height-1
         max_x:int = x+width-1
-        if max_x >= self._window_width:
-            width += (self._window_width-1)-max_x
-        if max_y >= self._window_height:
-            height += (self._window_height-1)-max_y
+        if max_x >= self.width:
+            width += (self.width-1)-max_x
+        if max_y >= self.height:
+            height += (self.height-1)-max_y
         if width <= 0 or height <= 0:
             return
         self.display.wgl_fill(color, self._window_x+x, self._window_y+y, width, height)
@@ -542,8 +552,8 @@ class WatchGraphics():
         last_y0 = y0
 
         error:int = dx_x2+dy_x2
-        window_width:int = self._window_width
-        window_height:int = self._window_height
+        window_width:int = self.width
+        window_height:int = self.height
         while True:
             width_change:int = 0
             height_change:int = 0
