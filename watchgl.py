@@ -85,6 +85,7 @@ class DisplayProtocol(Protocol):
         pass
 
 
+
 class DummyDisplay():
     def __init__(self, width:int, height:int, format:DisplayFormat=DisplayFormat.RGB565):
         self.spec = DisplaySpec(width, height, format)
@@ -358,6 +359,58 @@ class HorizontalCropStream():
 
 
 
+class StripedStream():
+    def __init__(self, instream:ImageStream, lines:int) -> None:
+        self._lines_per_stripe:int = lines
+        self._instream:ImageStream = instream
+
+        self.width:int = self._instream.width
+        self.height:int = 0
+        self._pixels_n:int = self.width*self._lines_per_stripe
+
+        self._stripe_start = 0
+
+        if (self._stripe_start + self._lines_per_stripe) > self._instream.height:
+            self.height = (self._stripe_start + self._lines_per_stripe) - self._instream.height
+            self.remaining = self.width*self.height
+        else:
+            self.height = self._lines_per_stripe
+            self.remaining = self._pixels_n
+        assert(self._instream.remaining >= self.remaining)
+    def reset(self):
+        self._stripe_start += self._lines_per_strip
+        if self._stripe_start >= self._instream.height:
+            self._instream.reset()
+            self._stripe_start = 0
+            self.height = 0
+        if (self._stripe_start + self._lines_per_stripe) > self._instream.height:
+            self.height = (self._stripe_start + self._lines_per_stripe) - self._instream.height
+            self.remaining = self.width*self.height
+        else:
+            self.height = self._lines_per_stripe
+            self.remaining = self._pixels_n
+        assert(self._instream.remaining >= self.remaining)
+    def skip_pixels(self, n:int) -> None:
+        remaining:int = self.remaining
+        if n > remaining:
+            n = remaining
+        self._instream.skip_pixels(n)
+        remaining -= n
+        self.remaining = remaining
+    def read_pixels(self, buf:memoryview, n:int, offset:int) -> int:
+        remaining:int = self.remaining
+        if remaining == 0:
+            raise EmptyImageStream()
+        if n > remaining:
+            n = remaining
+        r = self._instream.read_pixels(buf, n, offset)
+        remaining -= r
+        self.remaining = remaining
+        return r
+    def info(self) -> str:
+        return "STRIPED_STREAM("+str(self.height)+", "+self._instream.info()+")"
+
+
 
 
 
@@ -617,7 +670,10 @@ if __name__ == '__main__':
 
     img = DummyImageStream(240, 240)
     img2 = DummyImageStream(10, 10)
+    img3 = StripedStream(DummyImageStream(240, 240), 20)
 
     dg.blit(img, 10, 10)
     dg.blit(img2, 10, 10)
     dg.blit(img2, 239, 239)
+    for i in range(0, 240, 20):
+        dg.blit(img3, 0, i)
