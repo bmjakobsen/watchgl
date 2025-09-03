@@ -25,7 +25,6 @@ class DisplayFormat(Enum):
 class ImageStream(Protocol):
     width: int
     height: int
-    auto_reset: bool
     remaining: int
     # Reset Stream, or restart it
     def reset(self) -> None:
@@ -40,10 +39,9 @@ class ImageStream(Protocol):
         return ""
 
 class DummyImageStream():
-    def __init__(self, width:int, height:int, auto_reset:bool=True) -> None:
+    def __init__(self, width:int, height:int) -> None:
         self.width:int = width
         self.height:int = height
-        self.auto_reset = auto_reset
         self.remaining = self.width*self.height
     def reset(self) -> None:
         self.remaining = self.width*self.height
@@ -243,7 +241,6 @@ class VerticalCropStream():
         if skip+height > instream.height:
             height = height-(skip+height-instream.height)
         self.height:int = height
-        self.auto_reset:bool = instream.auto_reset
         self._instream:ImageStream = instream
 
         self._skip_lines:int = skip
@@ -286,7 +283,6 @@ class HorizontalCropStream():
         if skip+width > instream.width:
             width = width-(skip+width-instream.width)
         self.width:int = width
-        self.auto_reset:bool = instream.auto_reset
         self._instream:ImageStream = instream
         self._pixels_n:int = self.height*self.width
 
@@ -439,8 +435,7 @@ class WatchGraphics():
             x += skip_cols
 
         self.display.wgl_blit(image, x, y)
-        if image.auto_reset:
-            image.reset()
+        image.reset()
 
     def fill(self, color:int, x:int, y:int, width:int, height:int) -> None:
         y += self._shift_y
