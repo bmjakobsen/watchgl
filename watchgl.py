@@ -30,9 +30,6 @@ class ImageStream(Protocol):
     # Reset Stream, or restart it
     def reset(self) -> None:
         pass
-    # Mark that all reading is done
-    def done(self) -> None:
-        pass
     # Skip n Pixels
     def skip_pixels(self, n:int):
         pass
@@ -50,8 +47,6 @@ class DummyImageStream():
         self.remaining = self.width*self.height
     def reset(self) -> None:
         self.remaining = self.width*self.height
-    def done(self) -> None:
-        self.remaining = 0
     def skip_pixels(self, n:int) -> None:
         if n > self.remaining:
             n = self.remaining
@@ -264,9 +259,6 @@ class VerticalCropStream():
         self._instream.skip_pixels(self._skip)
         self.remaining:int = self._pixels_n
         assert(self._instream.remaining >= self.remaining)
-    def done(self) -> None:
-        self.remaining = 0
-        self._instream.done()
     def skip_pixels(self, n:int) -> None:
         remaining:int = self.remaining
         if n > remaining:
@@ -274,8 +266,6 @@ class VerticalCropStream():
         self._instream.skip_pixels(n)
         remaining -= n
         self.remaining = remaining
-        if remaining == 0:
-            self.done()
     def read_pixels(self, buf:memoryview, n:int, offset:int) -> int:
         remaining:int = self.remaining
         if remaining == 0:
@@ -285,8 +275,6 @@ class VerticalCropStream():
         r = self._instream.read_pixels(buf, n, offset)
         remaining -= r
         self.remaining = remaining
-        if remaining == 0:
-            self.done()
         return r
     def info(self) -> str:
         return "VERTICAL_CROP_STREAM("+str(self._skip_lines)+", "+str(self.height)+", "+self._instream.info()+")"
@@ -316,9 +304,6 @@ class HorizontalCropStream():
         self._remaining_in_line:int = self.width
         assert(self._instream.remaining >= self.remaining+self.height*self._skip)
         self._instream.skip_pixels(self._skip_at_start)
-    def done(self) -> None:
-        self.remaining = 0
-        self._instream.done()
     def skip_pixels(self, n:int) -> None:
         remaining:int = self.remaining
         if remaining == 0:
@@ -344,8 +329,6 @@ class HorizontalCropStream():
         self._instream.skip_pixels(skip_total)
         self.remaining = remaining
         self._remaining_in_line = rem_in_line
-        if remaining == 0:
-            self.done()
     def read_pixels(self, buf:memoryview, n:int, offset:int) -> int:
         remaining:int = self.remaining
         if remaining == 0:
@@ -372,8 +355,6 @@ class HorizontalCropStream():
                 n = 0
         self.remaining = remaining
         self._remaining_in_line = rem_in_line
-        if remaining == 0:
-            self.done()
         return read_bytes
     def info(self) -> str:
         return "HORIZONTAL_CROP_STREAM("+str(self._skip_at_start)+", "+str(self.width)+", "+self._instream.info()+")"
