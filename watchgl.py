@@ -250,7 +250,6 @@ class VerticalCropStream():
         self.height:int = height
         self.auto_reset:bool = instream.auto_reset
         self._instream:ImageStream = instream
-        #self._instream.reset()
 
         self._skip_lines:int = skip
 
@@ -301,7 +300,6 @@ class HorizontalCropStream():
         self.width:int = width
         self.auto_reset:bool = instream.auto_reset
         self._instream:ImageStream = instream
-        #self._instream.reset()
         self._pixels_n:int = self.height*self.width
 
         self._skip_at_start:int = skip
@@ -446,7 +444,6 @@ class WatchGraphics():
             if new_height <= 0:
                 return
             croppedy:ImageStream = self._crop_v_stream
-            croppedy.reset()
             croppedy.__init__(image, skip_lines, new_height)
             image = croppedy
             y += skip_lines
@@ -456,7 +453,6 @@ class WatchGraphics():
             if new_width <= 0:
                 return
             croppedx:ImageStream = self._crop_h_stream
-            croppedx.reset()
             croppedx.__init__(image, skip_cols, new_width)
             image = croppedx
             x += skip_cols
