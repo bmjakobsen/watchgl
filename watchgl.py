@@ -437,15 +437,21 @@ class WatchGraphics():
             self.display.wgl_blit(image, x, y)
             return
 
-        if reduce_by_cols > 0:
-            croppedx:ImageStream = HorizontalCropStream(image, skip_cols, image.width-reduce_by_cols)
-            image = croppedx
-            x += skip_cols
-
         if reduce_by_lines > 0:
-            croppedy:ImageStream = VerticalCropStream(image, skip_lines, image.height-reduce_by_lines)
+            new_height:int = image.height-reduce_by_lines
+            if new_height <= 0:
+                return
+            croppedy:ImageStream = VerticalCropStream(image, skip_lines, new_height)
             image = croppedy
             y += skip_lines
+
+        if reduce_by_cols > 0:
+            new_width:int = image.width-reduce_by_cols
+            if new_width <= 0:
+                return
+            croppedx:ImageStream = HorizontalCropStream(image, skip_cols, new_width)
+            image = croppedx
+            x += skip_cols
 
         self.display.wgl_blit(image, x, y)
 
@@ -604,7 +610,8 @@ class WatchGraphics():
                 y0 += sy
             error += error_change
         n_fills:int = pos>>2
-        display.wgl_fill_seq(color, start_x, start_y, buffer, n_fills)
+        if n_fills > 0:
+            display.wgl_fill_seq(color, start_x, start_y, buffer, n_fills)
 
 
     def draw_line_polar(self, color:int, x:int, y:int, theta:int, r0:int, r1:int, width:int):
@@ -625,5 +632,10 @@ if __name__ == '__main__':
     dg.draw_line(0, 1,  0, 1,  0, 1)
     dg.draw_line(0, 1,  0, 1,  6, 4)
     dg.draw_line(0, 3,  -1, -1,  6, 4)
+
     img = DummyImageStream(240, 240)
+    img2 = DummyImageStream(10, 10)
+
     dg.blit(img, 10, 10)
+    dg.blit(img2, 10, 10)
+    dg.blit(img2, 239, 239)
