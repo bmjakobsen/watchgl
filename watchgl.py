@@ -17,6 +17,18 @@ class DisplayFormat(Enum):
     #RGB666 = 176
     #RGB666_R = 177
 
+class GraphicsState(Enum):
+    Initial = 1
+    Update = 2
+    Forced = 3
+    Scrolling = 4
+    ScrollingFinal = 5
+
+class Direction(Enum):
+    Up = 0
+    Down = 1
+    Left = 2
+    Right = 3
 
 
 
@@ -105,7 +117,7 @@ class DummyDisplay():
 
 
 class Component():
-    def __init__(self, x:int, y:int, width:int, height:int, draw:Callable[["Component", "DisplayProtocol"], None]):
+    def __init__(self, x:int, y:int, width:int, height:int, draw:Callable[["Component", "WatchGraphics"], None]):
         self.x:int = x
         self.y:int = y
         self.width:int = width
@@ -114,7 +126,7 @@ class Component():
 
         self.weight:int = self.width*self.height
 
-        self.draw:Callable[["Component", "DisplayProtocol"], None] = draw
+        self.draw:Callable[["Component", "WatchGraphics"], None] = draw
         self._state: Dict[str, Any] = {}
         self.dirty:bool = True
         self._screen:"Screen" = _DUMMY_SCREEN
@@ -421,14 +433,16 @@ class WatchGraphics():
 
     def __init__(self, display:DisplayProtocol) -> None:
         self.display:DisplayProtocol = display
-        self.font = None
+        
+        self.state:GraphicsState = GraphicsState.Initial
+        self.scroll_direction:Direction = Direction.Up
+        self.scroll_stripe_size:int = 20            #FIX # TODO Select better source of value
+        self.scroll_y_shift:int = 0
 
         self.width:int = self.display.spec.width
         self.height:int = self.display.spec.height
         self._window_x:int = 0
         self._window_y:int = 0
-
-        self._shift_y:int = 0
 
         draw_line_buffer:array = array('b')
         for _ in range(display.spec.min_dimension*4):
@@ -446,11 +460,11 @@ class WatchGraphics():
         self._window_y = y
         self.width = width
         self.height = height
-        self._shift_y = shift_y
+        self.scroll_y_shift = shift_y
 
 
     def blit(self, image:ImageStream, x:int, y:int):
-        y += self._shift_y
+        y += self.scroll_y_shift
         skip_lines:int = 0
         if y < 0:
             skip_lines -= y
@@ -491,7 +505,7 @@ class WatchGraphics():
         image.reset()
 
     def fill(self, color:int, x:int, y:int, width:int, height:int) -> None:
-        y += self._shift_y
+        y += self.scroll_y_shift
         if y < 0:
             height += y
             y = 0
@@ -555,8 +569,8 @@ class WatchGraphics():
 
 
         # Shift content by y
-        y0 += self._shift_y
-        y1 += self._shift_y
+        y0 += self.scroll_y_shift
+        y1 += self.scroll_y_shift
 
 
 
