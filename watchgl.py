@@ -8,7 +8,7 @@ try:
     from micropython import const
     import micropython
 except ImportError:
-    print("Using Micropython Faker Class")
+    print("Using Micropython Faker Library")
     from micropython_faker import const
     import micropython_faker as micropython
 
@@ -107,11 +107,10 @@ class DisplayProtocol(Protocol):
 
 
 
-class BitBlitStream():
+class MonoImageStream():
     def __init__(self, color_format:ColorFormat, raw_data:memoryview, width:int, height:int):
         self._color_format:ColorFormat = color_format
-        self._fgcolor:int = 0xFFFF
-        self.bgcolor:int = 0
+        self._palette:array = memoryview(array('l', [0, 0xFFFF]))
 
         self._raw_data:memoryview = raw_data
         self.width:int = width
@@ -119,86 +118,105 @@ class BitBlitStream():
         self._n_pixels:int = width*height
 
         self.remaining:int = self._n_pixels
-        self._index:int = 0
-        self._cbyte:int = self._raw_data[0]
-        self._remaining_in_line:int = self.width
-        self._remaining_in_byte:int = 8
-        if self._remaining_in_line < 8:
-            self._remaining_in_byte:inz = self._remaining_in_line
+
+    def set_color(self, n:int, color:int) -> None:
+        if n < 0 or n > 1:
+            raise Exception("Invalid Palette Index")
+        if n < 0:
+            raise Exception("Negative Color given")
+        color &= 0xFFFF
+        cf:ColorFormat = self.color_format
+        if cf == ColorFormat.RGB565:
+            self._palette[n] = color
+        elif cf == ColorFormat.RGB565_R:
+            color2:int = (color>>8)&0xFF
+            color = (color<<8)&0xFF00
+            self._palette[n] = color | color2
+        else:
+            raise Exception("Unknown Color format given")
+
     def reset(self) -> None:
         self.remaining:int = self._n_pixels
-        self._index:int = 0
-        self._cbyte:int = self._raw_data[0]
-        self._remaining_in_line:int = self.width
-        self._remaining_in_byte:int = 8
-        if self._remaining_in_line < 8:
-            self._remaining_in_byte:int = self._remaining_in_line
 
     def skip_pixels(self, n:int) -> None:
         remaining:int = self.remaining
         if n > remaining:
             n = remaining
-        while self._remaining_in_byte:
-            pass
-        # TODO FIX BITBLIT STREAM
 
-        remaining -= n
+        width:int = self.width
+        raw_data:memoryview = self._raw_data
+        cbyte:int = self._cbyte
+        index:int = self._index
+        rem_in_b:int = self._remaining_in_byte
+        rem_in_l:int = self._remaining_in_line
+        for _ in range(n):
+            cbyte >>= 1
+            rem_in_b -= 1
+            rem_in_l -= 1
+            remaining -= 1
+            if remaining <= 0:
+                break
+            if rem_in_b == 0:
+                rem_in_b = 8
+                if rem_in_l == 0:
+                    rem_in_l = width
+                elif rem_in_l < 8:
+                    rem_in_b = rem_in_l
+                index += 1
+                cbyte = raw_data[index]
+        self._cbyte = cbyte
+        self._index = index
+        self._remaining_in_byte = rem_in_b
+        self._remaining_in_line = rem_in_l
         self.remaining = remaining
     def read_pixels(self, buf:memoryview, n:int, offset:int) -> int:
         remaining:int = self.remaining
         if remaining == 0:
             raise EmptyImageStream()
-        finishing:int = False
         if n >= remaining:
-            finishing:int = True
             n = remaining
-        c:int = n
 
 
-        rem_in_byte:int = self._remaining_in_byte
-        rem_in_line:int = self._remaining_in_line
-        bgcolor:int = self._bgcolor
-        fgcolor:int = self._bgcolor
+        palette:array = self._palette
+        width:int = self.width
+
+        raw_data:memoryview = self._raw_data
         cbyte:int = self._cbyte
-        color_format:ColorFormat = self._color_format
-        while True:
-            while rem_in_byte > 0 and c:
-                pixel:int = cbyte&1
-                color = bgcolor
-                if pixel:
-                    color = fgcolor
-                upper_byte:int = 0
-                lower_byte:int = 0
-                if color_format == ColorFormat.RGB565:
-                    lower_byte = color&0xFF
-                    upper_byte = color>>8
-                elif color_format == ColorFormat.RGB565_R:
-                    lower_byte = color>>8
-                    upper_byte = color&0xFF
-                else:
-                    raise Exception("Shouldnt Happen")
-                buf[offset] = lower
-                buf[offset+1] = upper
-                offset += 2
-                rem_in_byte -= 1
-                rem_in_line -= 1
-                remaining -= 1
-                c -= 1
-            if c == 0 and finishing:
-                break
-            if rem_in_byte == 0:
-                self._index += 1
-            if c == 0:
-                pass
-                # TODO FIX BITBLIT STREAM
+        index:int = self._index
+        rem_in_b:int = self._remaining_in_byte
+        rem_in_l:int = self._remaining_in_line
 
-        remaining -= n
+        for _ in range(n):
+            color:int = palette[cbyte&1]
+            buf[offset] = color&0xFF
+            buf[offset+1] = (color>>8)&0xFF
+            offset += 2
+
+            cbyte >>= 1
+            rem_in_b -= 1
+            rem_in_l -= 1
+            remaining -= 1
+            if remaining <= 0:
+                break
+            if rem_in_b == 0:
+                rem_in_b = 8
+                if rem_in_l == 0:
+                    rem_in_l = width
+                elif rem_in_l < 8:
+                    rem_in_b = rem_in_l
+                index += 1
+                cbyte = raw_data[index]
+        self._cbyte = cbyte
+        self._index = index
+        self._remaining_in_byte = rem_in_b
+        self._remaining_in_line = rem_in_l
+
         self.remaining = remaining
         return n
 
 
 class LegacyFontWrapper():
-    def __init__(self, font_data, bitblit:BitBlitStream):
+    def __init__(self, font_data, bitblit:MonoImageStream):
         self.height:int = int(font_data.height())
         self.max_width:int = int(font_data.max_width())
         self.baseline:int = int(font_data.baseline())
@@ -208,12 +226,12 @@ class LegacyFontWrapper():
         self.min_ch:int = int(font_data.min_ch())
         self.max_ch:int = int(font_data.max_ch())
         self._raw_data = font_data
-        self._bitblit:BitBlitStream = bitblit
+        self._bitblit:MonoImageStream = bitblit
     def set_bgcolor(self, color:int) -> None:
-        self._bitblit.set_bgcolor(color)
+        self._bitblit.set_color(0, color)
     def set_fgcolor(self, color:int) -> None:
-        self._bitblit.set_fgcolor(color)
-    def get_ch(ch:str) -> Tuple[BitBlitStream, int, int]:
+        self._bitblit.set_color(1, color)
+    def get_ch(ch:str) -> Tuple[MonoImageStream, int, int]:
         (px, h, w) = self._raw_data.get_ch(ch)
         self._bitblit.set_image_data(px, h, w)
         return (self._bitblit, int(h), int(w))
@@ -550,12 +568,12 @@ class StripedStream():
 
 
 
+_C_TO_RADIANS:float = const(math.pi / 180)
 class WatchGraphics():
-    _C_TO_RADIANS:float = math.pi / 180
 
     def __init__(self, display:DisplayProtocol) -> None:
         #self._font:LegacyFontWrapper = LegacyFontWrapper()
-        # TODO FIX DEFAULT FAULT
+        # TODO FIX DEFAULT FONT
         self.display:DisplayProtocol = display
         
         self.bgcolor = 0
