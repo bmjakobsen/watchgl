@@ -10,12 +10,9 @@ import math
 BGCOLOR_TRANSPARENT = -1
 
 
-class DisplayFormat(Enum):
+class ColorFormat(Enum):
     RGB565 = 128
     RGB565_R = 129
-    #RGB444 = 144
-    #RGB666 = 176
-    #RGB666_R = 177
 
 class GraphicsState(Enum):
     Initial = 1
@@ -71,13 +68,10 @@ class DummyImageStream():
 
 
 class DisplaySpec():
-    width: int
-    height: int
-    format: DisplayFormat
-    def __init__(self, width:int, height:int, format:DisplayFormat) -> None:
+    def __init__(self, width:int, height:int, color_format:ColorFormat) -> None:
         self.width:int = width
         self.height:int = height
-        self.format:int = format
+        self.color_format:int = color_format
         self.max_dimension:int = width
         self.min_dimension:int = height
         if height > width:
@@ -99,8 +93,8 @@ class DisplayProtocol(Protocol):
 
 
 class DummyDisplay():
-    def __init__(self, width:int, height:int, format:DisplayFormat=DisplayFormat.RGB565):
-        self.spec = DisplaySpec(width, height, format)
+    def __init__(self, width:int, height:int, color_format:ColorFormat=ColorFormat.RGB565):
+        self.spec = DisplaySpec(width, height, color_format)
     def wgl_fill(self, color:int, x:int, y:int, width:int, height:int) -> None:
         print("FILL "+hex(color)+", X:"+str(x)+", Y:"+str(y)+", W:"+str(width)+", H:"+str(height))
     def wgl_fill_seq(self, color:int, x:int, y:int, data:memoryview, n:int) -> None:
@@ -238,7 +232,7 @@ class Screen():
                 com.draw(com, display)
             self.update_array[byti] = 0
         self.update_bitfield = 0
-_DUMMY_DISPLAY_SPEC = DisplaySpec(0, 0, DisplayFormat.RGB565)
+_DUMMY_DISPLAY_SPEC = DisplaySpec(0, 0, ColorFormat.RGB565)
 _DUMMY_SCREEN:Screen = Screen(0, _DUMMY_DISPLAY_SPEC, [])
 
 
