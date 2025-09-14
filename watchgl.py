@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
-#import micropython
 from typing import Protocol, Any, Tuple, List, Callable, Dict, Optional
 from array import array
 from enum import Enum
 import math
+
+try:
+    from micropython import const
+    import micropython
+except ImportError:
+    print("Using Micropython Faker Class")
+    from micropython_faker import const
+    import micropython_faker as micropython
+
 
 
 
@@ -27,6 +35,11 @@ class Direction(Enum):
     Left = 2
     Right = 3
 
+class Alignment(Enum):
+    CENTER = 0
+    LEFT = 1
+    RIGHT = 2
+
 
 
 
@@ -39,7 +52,7 @@ class ImageStream(Protocol):
     def reset(self) -> None:
         pass
     # Skip n Pixels
-    def skip_pixels(self, n:int):
+    def skip_pixels(self, n:int) -> None:
         pass
     # Read n Pixels, into the buffer at the given offset, returns number of pixels read. Offset is in pixels
     def read_pixels(self, buf:memoryview, n:int, offset:int) -> int:
@@ -92,6 +105,121 @@ class DisplayProtocol(Protocol):
 
 
 
+
+
+class BitBlitStream():
+    def __init__(self, color_format:ColorFormat, raw_data:memoryview, width:int, height:int):
+        self._color_format:ColorFormat = color_format
+        self._fgcolor:int = 0xFFFF
+        self.bgcolor:int = 0
+
+        self._raw_data:memoryview = raw_data
+        self.width:int = width
+        self.height:int = height
+        self._n_pixels:int = width*height
+
+        self.remaining:int = self._n_pixels
+        self._index:int = 0
+        self._cbyte:int = self._raw_data[0]
+        self._remaining_in_line:int = self.width
+        self._remaining_in_byte:int = 8
+        if self._remaining_in_line < 8:
+            self._remaining_in_byte:inz = self._remaining_in_line
+    def reset(self) -> None:
+        self.remaining:int = self._n_pixels
+        self._index:int = 0
+        self._cbyte:int = self._raw_data[0]
+        self._remaining_in_line:int = self.width
+        self._remaining_in_byte:int = 8
+        if self._remaining_in_line < 8:
+            self._remaining_in_byte:int = self._remaining_in_line
+
+    def skip_pixels(self, n:int) -> None:
+        remaining:int = self.remaining
+        if n > remaining:
+            n = remaining
+        while self._remaining_in_byte:
+            pass
+        # TODO FIX BITBLIT STREAM
+
+        remaining -= n
+        self.remaining = remaining
+    def read_pixels(self, buf:memoryview, n:int, offset:int) -> int:
+        remaining:int = self.remaining
+        if remaining == 0:
+            raise EmptyImageStream()
+        finishing:int = False
+        if n >= remaining:
+            finishing:int = True
+            n = remaining
+        c:int = n
+
+
+        rem_in_byte:int = self._remaining_in_byte
+        rem_in_line:int = self._remaining_in_line
+        bgcolor:int = self._bgcolor
+        fgcolor:int = self._bgcolor
+        cbyte:int = self._cbyte
+        color_format:ColorFormat = self._color_format
+        while True:
+            while rem_in_byte > 0 and c:
+                pixel:int = cbyte&1
+                color = bgcolor
+                if pixel:
+                    color = fgcolor
+                upper_byte:int = 0
+                lower_byte:int = 0
+                if color_format == ColorFormat.RGB565:
+                    lower_byte = color&0xFF
+                    upper_byte = color>>8
+                elif color_format == ColorFormat.RGB565_R:
+                    lower_byte = color>>8
+                    upper_byte = color&0xFF
+                else:
+                    raise Exception("Shouldnt Happen")
+                buf[offset] = lower
+                buf[offset+1] = upper
+                offset += 2
+                rem_in_byte -= 1
+                rem_in_line -= 1
+                remaining -= 1
+                c -= 1
+            if c == 0 and finishing:
+                break
+            if rem_in_byte == 0:
+                self._index += 1
+            if c == 0:
+                pass
+                # TODO FIX BITBLIT STREAM
+
+        remaining -= n
+        self.remaining = remaining
+        return n
+
+
+class LegacyFontWrapper():
+    def __init__(self, font_data, bitblit:BitBlitStream):
+        self.height:int = int(font_data.height())
+        self.max_width:int = int(font_data.max_width())
+        self.baseline:int = int(font_data.baseline())
+        self.hmap:bool = bool(font_data.hmap())
+        self.reverse:bool = bool(font_data.reverse())
+        self.monospaced:bool = bool(font_data.monospaced())
+        self.min_ch:int = int(font_data.min_ch())
+        self.max_ch:int = int(font_data.max_ch())
+        self._raw_data = font_data
+        self._bitblit:BitBlitStream = bitblit
+    def set_bgcolor(self, color:int) -> None:
+        self._bitblit.set_bgcolor(color)
+    def set_fgcolor(self, color:int) -> None:
+        self._bitblit.set_fgcolor(color)
+    def get_ch(ch:str) -> Tuple[BitBlitStream, int, int]:
+        (px, h, w) = self._raw_data.get_ch(ch)
+        self._bitblit.set_image_data(px, h, w)
+        return (self._bitblit, int(h), int(w))
+
+
+
 class DummyDisplay():
     def __init__(self, width:int, height:int, color_format:ColorFormat=ColorFormat.RGB565):
         self.spec = DisplaySpec(width, height, color_format)
@@ -116,7 +244,7 @@ class Component():
         self.y:int = y
         self.width:int = width
         self.height:int = height
-        self.bg:int = BGCOLOR_TRANSPARENT
+        self.bgcolor:int = BGCOLOR_TRANSPARENT
 
         self.weight:int = self.width*self.height
 
@@ -128,7 +256,7 @@ class Component():
     def set_bgcolor(self, color:int) -> None:
         if self._cid:
             raise Exception("Cant Set Background Color after adding component to screen")
-        self.bg = color
+        self.bgcolor = color
     def register(self, screen:"Screen", cid:int) -> None:
         self._screen = screen
         self._cid = cid
@@ -158,7 +286,7 @@ class Screen():
         if len(components) > 127:
             raise Exception("Too many components")
         cid:int = 1
-        self.bg:int = bgcolor
+        self.bgcolor:int = bgcolor
         self.transparent:bool = False
 
         self.display_spec:DisplaySpec = display_spec
@@ -426,8 +554,11 @@ class WatchGraphics():
     _C_TO_RADIANS:float = math.pi / 180
 
     def __init__(self, display:DisplayProtocol) -> None:
+        #self._font:LegacyFontWrapper = LegacyFontWrapper()
+        # TODO FIX DEFAULT FAULT
         self.display:DisplayProtocol = display
         
+        self.bgcolor = 0
         self.state:GraphicsState = GraphicsState.Initial
         self.scroll_direction:Direction = Direction.Up
         self.scroll_stripe_size:int = 20            #FIX # TODO Select better source of value
@@ -666,6 +797,30 @@ class WatchGraphics():
         y0:int = x - int(ydelta * r0)
         y1:int = x - int(ydelta * r1)
         self.draw_line(x0, y0, x1, y1, width, color)
+
+
+    def draw_string(self, color:int, s:str, x:int, y:int) -> None:
+        window_width:int = self.width
+        window_height:int = self.height
+        font:LegacyFontWrapper = self._font
+        font.set_fgcolor(color)
+        font_height = font.height()
+
+        if y >= window_height:
+            return
+        if x >= window_width:
+            return
+        if y+font_height <= 0:
+            return
+
+        for c in s:
+            (cpx, ch, cw) = font.get_ch(c)
+            if x+cw <= 0:
+                x += cw
+                continue
+            if x >= window_width:
+                break
+            self.blit(cpx, x, y)
 
 
 
