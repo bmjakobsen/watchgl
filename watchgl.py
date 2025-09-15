@@ -28,7 +28,7 @@ except Exception:
     pass
 
 
-
+py_int = builtins.int
 
 
 
@@ -186,7 +186,8 @@ class VerticalCropStream():
         remaining -= n
         self.remaining = remaining
     @micropython.viper
-    def read_pixels(self, buf:ptr8, n:int, offset:int) -> int:
+    def read_pixels(self, buf, n:int, offset:int) -> int:
+        global py_int
         remaining:int = int(self.remaining)
         if remaining == 0:
             raise EmptyImageStream()
@@ -194,7 +195,7 @@ class VerticalCropStream():
             n = remaining
         r:int = int(self._instream.read_pixels(buf, n, offset))
         remaining -= r
-        self.remaining = builtins.int(remaining)
+        self.remaining = py_int(remaining)
         return r
     def info(self) -> str:
         return "VERTICAL_CROP_STREAM("+str(self._skip_lines)+", "+str(self.height)+", "+self._instream.info()+")"
@@ -221,17 +222,19 @@ class HorizontalCropStream():
         self._remaining_in_line:int = self.width
         assert(self._instream.remaining >= self.remaining+self.height*self._skip)
         self._instream.skip_pixels(self._skip_at_start)
+    @micropython.viper
     def skip_pixels(self, n:int):
-        remaining:int = self.remaining
+        global py_int
+        remaining:int = int(self.remaining)
         if remaining == 0:
             raise EmptyImageStream()
         if n > remaining:
             n = remaining
 
         skip_total:int = 0
-        skip:int = self._skip
-        rem_in_line:int = self._remaining_in_line
-        width:int = self.width
+        skip:int = int(self._skip)
+        rem_in_line:int = int(self._remaining_in_line)
+        width:int = int(self.width)
         while n > 0:
             if n >= rem_in_line:
                 skip_total += rem_in_line+skip
@@ -244,10 +247,11 @@ class HorizontalCropStream():
                 remaining -= n
                 n = 0
         self._instream.skip_pixels(skip_total)
-        self.remaining = remaining
-        self._remaining_in_line = rem_in_line
+        self.remaining = py_int(remaining)
+        self._remaining_in_line = py_int(rem_in_line)
     @micropython.viper
-    def read_pixels(self, buf:ptr8, n:int, offset:int) -> int:
+    def read_pixels(self, buf, n:int, offset:int) -> int:
+        global py_int
         remaining:int = int(self.remaining)
         if remaining == 0:
             raise EmptyImageStream()
@@ -271,8 +275,8 @@ class HorizontalCropStream():
                 rem_in_line -= n
                 remaining -= n
                 n = 0
-        self.remaining = builtins.int(remaining)
-        self._remaining_in_line = builtins.int(rem_in_line)
+        self.remaining = py_int(remaining)
+        self._remaining_in_line = py_int(rem_in_line)
         return read_bytes
     def info(self) -> str:
         return "HORIZONTAL_CROP_STREAM("+str(self._skip_at_start)+", "+str(self.width)+", "+self._instream.info()+")"
@@ -400,17 +404,19 @@ class MonoImageStream():
         if self._remaining_in_line < 8:
             self._remaining_in_byte:int = self._remaining_in_line
 
+    @micropython.viper
     def skip_pixels(self, n:int):
-        remaining:int = self.remaining
+        global py_int
+        remaining:int = int(self.remaining)
         if n > remaining:
             n = remaining
 
-        width:int = self.width
-        raw_data:memoryview = self._raw_data
-        cbyte:int = self._cbyte
-        index:int = self._index
-        rem_in_b:int = self._remaining_in_byte
-        rem_in_l:int = self._remaining_in_line
+        width:int = int(self.width)
+        raw_data:ptr8 = ptr8(self._raw_data)
+        cbyte:int = int(self._cbyte)
+        index:int = int(self._index)
+        rem_in_b:int = int(self._remaining_in_byte)
+        rem_in_l:int = int(self._remaining_in_line)
         for _ in range(n):
             cbyte >>= 1
             rem_in_b -= 1
@@ -426,14 +432,15 @@ class MonoImageStream():
                     rem_in_b = rem_in_l
                 index += 1
                 cbyte = raw_data[index]
-        self._cbyte = cbyte
-        self._index = index
-        self._remaining_in_byte = rem_in_b
-        self._remaining_in_line = rem_in_l
-        self.remaining = remaining
+        self._cbyte = py_int(cbyte)
+        self._index = py_int(index)
+        self._remaining_in_byte = py_int(rem_in_b)
+        self._remaining_in_line = py_int(rem_in_l)
+        self.remaining = py_int(remaining)
 
     @micropython.viper
-    def read_pixels(self, buf:ptr8, n:int, offset:int) -> int:
+    def read_pixels(self, buf, n:int, offset:int) -> int:
+        global py_int
         remaining:int = int(self.remaining)
         if remaining == 0:
             raise EmptyImageStream()
@@ -472,12 +479,12 @@ class MonoImageStream():
                     rem_in_b = rem_in_l
                 index += 1
                 cbyte = raw_data[index]
-        self._cbyte = builtins.int(cbyte)
-        self._index = builtins.int(index)
-        self._remaining_in_byte = builtins.int(rem_in_b)
-        self._remaining_in_line = builtins.int(rem_in_l)
+        self._cbyte = py_int(cbyte)
+        self._index = py_int(index)
+        self._remaining_in_byte = py_int(rem_in_b)
+        self._remaining_in_line = py_int(rem_in_l)
 
-        self.remaining = builtins.int(remaining)
+        self.remaining = py_int(remaining)
         return n
 
 
@@ -573,15 +580,17 @@ class Screen():
         self.update_bitfield:int = 0
     @micropython.viper
     def notify_component_update(self, cid:int):
+        global py_int
         byti:int = cid>>3
         biti:int = cid&0x7
         update_pattern:int = 1<<biti
         byti2:int = int(self.update_array[byti]) | update_pattern
         biti2:int = int(self.update_bitfield) | 1<<byti
-        self.update_array[byti] = builtins.int(byti2)
-        self.update_bitfield = builtins.int(biti2)
-    @micropython.viper
+        self.update_array[byti] = py_int(byti2)
+        self.update_bitfield = py_int(biti2)
+    #@micropython.viper
     def draw(self, display):
+        global py_int
         update_bitfield:int = int(self.update_bitfield)
         if update_bitfield == 0:
             return
@@ -606,8 +615,8 @@ class Screen():
                 cid = id_block_off+id_sub
                 com = self.components[cid]
                 com.draw(com, display)
-            self.update_array[byti] = builtins.int(0)
-        self.update_bitfield = builtins.int(0)
+            self.update_array[byti] = py_int(0)
+        self.update_bitfield = py_int(0)
 
 
 
@@ -681,7 +690,7 @@ class WatchGraphics():
         self.scroll_y_shift = shift_y
 
 
-    @micropython.viper
+    #@micropython.viper
     def blit(self, image, x:int, y:int):
         y += int(self.scroll_y_shift)
         width:int = int(self.width)
@@ -727,7 +736,7 @@ class WatchGraphics():
         self.display.wgl_blit(image, x, y)
         image.reset()
 
-    @micropython.viper
+    #@micropython.viper
     def fill(self, color:int, x:int, y:int, width:int, height:int):
         y += int(self.scroll_y_shift)
         sheight:int = int(self.height)
@@ -892,7 +901,7 @@ class WatchGraphics():
             display.wgl_fill_seq(color, start_x, start_y, buffer, n_fills)
 
 
-    @micropython.native
+    #@micropython.native
     def draw_line_polar(self, color:int, x:int, y:int, theta:int, r0:int, r1:int, width:int):
         theta2:float = theta._C_TO_RADIANS
         xdelta:float = math.sin(theta2)
@@ -904,7 +913,7 @@ class WatchGraphics():
         self.draw_line(x0, y0, x1, y1, width, color)
 
 
-    @micropython.native
+    #@micropython.native
     def draw_string(self, color:int, s:str, x:int, y:int):
         window_width:int = self.width
         window_height:int = self.height
