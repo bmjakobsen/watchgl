@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
-from typing import Protocol, Any, Tuple, List, Callable, Dict, Optional
 from array import array
-from enum import Enum
 import math
 import builtins
 
@@ -63,16 +61,21 @@ def _array_get_int_type(n:int, unsigned:bool=False) -> str:
                 continue
         except OverflowError:
             continue
+
         try:
             a[0] = minm
             if a[0] == minm:
                 continue
+        except OverflowError:
+            pass
+
+        try:
             a[0] = maxm
             if a[0] == maxm:
                 continue
-            return ctype
         except OverflowError:
-            return ctype
+            pass
+        return ctype
     raise Exception("Unable to get fitting ctype")
 
 
@@ -83,24 +86,28 @@ def _array_get_int_type(n:int, unsigned:bool=False) -> str:
 BGCOLOR_TRANSPARENT = -1
 
 
-class ColorFormat(Enum):
+# Enum
+class ColorFormat():
     RGB565 = 128
     RGB565_R = 129
 
-class GraphicsState(Enum):
+# Enum
+class GraphicsState():
     Initial = 1
     Update = 2
     Forced = 3
     Scrolling = 4
     ScrollingFinal = 5
 
-class Direction(Enum):
+# Enum
+class Direction():
     Up = 0
     Down = 1
     Left = 2
     Right = 3
 
-class Alignment(Enum):
+# Enum
+class Alignment():
     CENTER = 0
     LEFT = 1
     RIGHT = 2
@@ -118,7 +125,7 @@ class DisplaySpec():
             self.max_dimension:int = height
             self.min_dimension:int = width
 
-class ImageStream(Protocol):
+class ImageStream():
     width: int
     height: int
     remaining: int
@@ -137,7 +144,7 @@ class ImageStream(Protocol):
 
 
 
-class DisplayProtocol(Protocol):
+class DisplayProtocol():
     spec: DisplaySpec
 
     def wgl_fill(self, color:int, x:int, y:int, width:int, height:int):
@@ -157,7 +164,7 @@ class EmptyImageStream(Exception):
 
 
 
-class VerticalCropStream():
+class VerticalCropStream(ImageStream):
     def __init__(self, instream:ImageStream, skip:int, height:int):
         self.width:int = instream.width
         if skip+height > instream.height:
@@ -199,7 +206,7 @@ class VerticalCropStream():
         return r
     def info(self) -> str:
         return "VERTICAL_CROP_STREAM("+str(self._skip_lines)+", "+str(self.height)+", "+self._instream.info()+")"
-class HorizontalCropStream():
+class HorizontalCropStream(ImageStream):
     def __init__(self, instream:ImageStream, skip:int, width:int):
         self.height:int = instream.height
         if skip+width > instream.width:
@@ -281,7 +288,7 @@ class HorizontalCropStream():
     def info(self) -> str:
         return "HORIZONTAL_CROP_STREAM("+str(self._skip_at_start)+", "+str(self.width)+", "+self._instream.info()+")"
 
-class StripedStream():
+class StripedStream(ImageStream):
     def __init__(self, instream:ImageStream, lines:int) -> None:
         self._lines_per_stripe:int = lines
         self._instream:ImageStream = instream
@@ -337,7 +344,7 @@ class StripedStream():
 
 
 
-class MonoImageStream():
+class MonoImageStream(ImageStream):
     _16BIT_UNSIGNED_INT = _array_get_int_type(16, True)
     def __init__(self, screen_color_format:ColorFormat, raw_data:memoryview, width:int, height:int):
         if width <= 0 or height <= 0:
@@ -441,6 +448,7 @@ class MonoImageStream():
     @micropython.viper
     def read_pixels(self, buf, n:int, offset:int) -> int:
         global py_int
+        buf2:ptr8 = ptr8(buf)
         remaining:int = int(self.remaining)
         if remaining == 0:
             raise EmptyImageStream()
@@ -461,8 +469,8 @@ class MonoImageStream():
 
         for _ in range(n):
             color:int = palette[cbyte&1]
-            buf[offset] = color&0xFF
-            buf[offset+1] = (color>>8)&0xFF
+            buf2[offset] = color&0xFF
+            buf2[offset+1] = (color>>8)&0xFF
             offset += 2
 
             cbyte >>= 1
@@ -492,51 +500,50 @@ class MonoImageStream():
 
 
 
+# The Draw Function of a component takes a Component as parameter and a WatchGraphics instance
+def _draw_function_sample(com:'Component', wg:'WatchGraphics'):
+    return None
+
 class Component():
-    def __init__(self, x:int, y:int, width:int, height:int, draw:Callable[["Component", "WatchGraphics"], None]):
+    def __init__(self, x:int, y:int, width:int, height:int, draw_function):
         self.x:int = x
         self.y:int = y
         self.width:int = width
         self.height:int = height
-        self.bgcolor:int = BGCOLOR_TRANSPARENT
 
         self.weight:int = self.width*self.height
 
-        self.draw:Callable[["Component", "WatchGraphics"], None] = draw
-        self._state: Dict[str, Any] = {}
+        self.draw = draw_function
+        self._state:dict = {}
         self.dirty:bool = True
         self._screen:"Screen" = _DUMMY_SCREEN
         self._cid:int = 0
-    def set_bgcolor(self, color:int):
-        if self._cid:
-            raise Exception("Cant Set Background Color after adding component to screen")
-        self.bgcolor = color
     def register(self, screen:"Screen", cid:int):
         self._screen = screen
         self._cid = cid
-    def init_vars(self, state:Dict[str, Any]):
+    def init_vars(self, state:dict):
         self._state = state
         if not self.dirty:
             self._screen.notify_component_update(self._cid)
             self.dirty = True
-    def get_var_dict(self) -> Dict[str, Any]:
+    def get_var_dict(self) -> dict:
         return self._state
-    def get_var(self, k:str) -> Any:
+    def get_var(self, k:str):
         return self._state[k]
-    def set_var(self, k:str, v:Any):
+    def set_var(self, k:str, v):
         if k in self._state and self._state[k] == v:
             return
         self._state[k] = v
         if not self.dirty:
             self._screen.notify_component_update(self._cid)
             self.dirty = True
-    def set_var_q(self, k:str, v:Any):
+    def set_var_q(self, k:str, v):
         self._state[k] = v
 
 
 class Screen():
-    def __init__(self, bgcolor:int, display_spec:DisplaySpec, components:List['Component']):
-        ncomponents:List['Component'] = []
+    def __init__(self, bgcolor:int, display_spec:DisplaySpec, components):
+        ncomponents = []
         if len(components) > 127:
             raise Exception("Too many components")
         cid:int = 1
@@ -556,9 +563,6 @@ class Screen():
 
 
         for c in components:
-            if c.bg == BGCOLOR_TRANSPARENT:
-                c.bg = bgcolor
-
             if c.x < self.bounds_x0:
                 self.bounds_x0 = c.x
             if c.y < self.bounds_y0:
@@ -573,7 +577,7 @@ class Screen():
             c.register(self, cid)
             ncomponents.append(c)
             cid = cid+1
-        self.components:List['Component'] = ncomponents
+        self.components = ncomponents
         self.update_array = memoryview(bytearray(16))
         for i in range(0,16):
             self.update_array[i] = 0
@@ -641,10 +645,10 @@ class _LegacyFontWrapper():
         self._bitblit.set_color(0, color)
     def set_fgcolor(self, color:int):
         self._bitblit.set_color(1, color)
-    def get_ch(ch:str) -> Tuple[MonoImageStream, int, int]:
+    def get_ch(ch:str) -> MonoImageStream:
         (px, h, w) = self._raw_data.get_ch(ch)
         self._bitblit.set_image_data(px, w, h)
-        return (self._bitblit, int(h), int(w))
+        return self._bitblit
 
 
 
@@ -913,14 +917,19 @@ class WatchGraphics():
         self.draw_line(x0, y0, x1, y1, width, color)
 
 
+    # Returns a tuple of integers
     #@micropython.native
-    def string_rendered_width(self, s:str) -> int:
+    def string_bounding_box(self, s:str):
+        height:int = 0
         width:int = 0
         for c in s:
-            (cpx, ch, cw) = font.get_ch(c)
-            cw2:int = int(cw)
+            cpx = font.get_ch(c)
+            cw2:int = int(cpx.width)
+            ch2:int = int(cpx.height)
             width += cw2
-        return width
+            if ch2 > height:
+                height = ch2
+        return (width, height)
 
 
 
@@ -940,7 +949,9 @@ class WatchGraphics():
             return
 
         for c in s:
-            (cpx, ch, cw) = font.get_ch(c)
+            cpx = font.get_ch(c)
+            cw:int = int(cpx.width)
+            ch:int = int(cpx.height)
             if x+cw <= 0:
                 x += cw
                 continue
@@ -949,7 +960,8 @@ class WatchGraphics():
             self.blit(cpx, x, y)
 
     def draw_string_a(self, color:int, s:str, x:int, y:int, align:Alignment):
-        rwidth:int = self.string_rendered_width(s)
+        (rw, rh) = self.string_bounding_box(s)
+        rwidth:int = int(rw)
         if align == Alignment.CENTER:
             offset:int = (rwidth>>1)
             self.draw_string(color, s, x-offset, y)
@@ -965,7 +977,7 @@ class WatchGraphics():
 
 
 _DUMMY_SCREEN:Screen = Screen(0, DisplaySpec(0, 0, ColorFormat.RGB565), [])
-class DummyDisplay():
+class DummyDisplay(DisplayProtocol):
     def __init__(self, width:int, height:int, color_format:ColorFormat=ColorFormat.RGB565):
         self.spec = DisplaySpec(width, height, color_format)
     def wgl_fill(self, color:int, x:int, y:int, width:int, height:int):
@@ -980,7 +992,7 @@ class DummyDisplay():
     def wgl_blit(self, image:ImageStream, x:int, y:int):
         print("BLIT IMAGE:    X:"+str(x)+", Y:"+str(y)+", W:"+str(image.width)+", H:"+str(image.height))
         print("  "+image.info())
-class DummyImageStream():
+class DummyImageStream(ImageStream):
     def __init__(self, width:int, height:int):
         self.width:int = width
         self.height:int = height
