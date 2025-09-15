@@ -13,6 +13,69 @@ except ImportError:
     from micropython_faker import const
     import micropython_faker as micropython
 
+try:
+    ptr8()
+except NameError:
+    ptr8 = memoryview
+except Exception:
+    pass
+
+try:
+    ptr16()
+except NameError:
+    ptr16 = memoryview
+except Exception:
+    pass
+
+
+
+
+
+
+_ARRAY_TEST_MIN_MAX_SIZE = {
+    (8,  False):  (       -128,          127),
+    (8,  True):   (          0,          255),
+    (16, False):  (     -32768,        32767),
+    (16, True):   (          0,        65535),
+    (32, False):  (-2147483648,   2147483647),
+    (32, True):   (          0,   4294967295)
+}
+_ARRAY_TEST_INTEGERS = {
+    False:      [ 'b', 'h', 'i', 'l', 'q' ],
+    True:       [ 'B', 'H', 'I', 'L', 'Q' ]
+}
+
+def _array_get_int_type(n:int, unsigned:bool=False) -> str:
+    global _ARRAY_TEST_MIN_MAX_SIZE, _ARRAY_TEST_INTEGERS
+    if n not in [8, 16, 32]:
+        raise Exception("Invalid Choice")
+    (min, max) = _ARRAY_TEST_MIN_MAX_SIZE[(n, unsigned)]
+    minm = min-1
+    maxm = max+1
+    for ctype in _ARRAY_TEST_INTEGERS[unsigned]:
+        a = array(ctype, [0])
+        try:
+            a[0] = min
+            if a[0] != min:
+                continue
+            a[0] = max
+            if a[0] != max:
+                continue
+        except OverflowError:
+            continue
+        try:
+            a[0] = minm
+            if a[0] == minm:
+                continue
+            a[0] = maxm
+            if a[0] == maxm:
+                continue
+            return ctype
+        except OverflowError:
+            return ctype
+    raise Exception("Unable to get fitting ctype")
+
+
 
 
 
@@ -122,6 +185,7 @@ class VerticalCropStream():
         self._instream.skip_pixels(n)
         remaining -= n
         self.remaining = remaining
+    @micropython.viper
     def read_pixels(self, buf:ptr8, n:int, offset:int) -> int:
         remaining:int = int(self.remaining)
         if remaining == 0:
@@ -213,15 +277,69 @@ class HorizontalCropStream():
     def info(self) -> str:
         return "HORIZONTAL_CROP_STREAM("+str(self._skip_at_start)+", "+str(self.width)+", "+self._instream.info()+")"
 
+class StripedStream():
+    def __init__(self, instream:ImageStream, lines:int) -> None:
+        self._lines_per_stripe:int = lines
+        self._instream:ImageStream = instream
+
+        self.width:int = self._instream.width
+        self.height:int = 0
+        self._pixels_n:int = self.width*self._lines_per_stripe
+
+        self._stripe_start = 0
+
+        if (self._stripe_start + self._lines_per_stripe) > self._instream.height:
+            self.height = (self._stripe_start + self._lines_per_stripe) - self._instream.height
+            self.remaining = self.width*self.height
+        else:
+            self.height = self._lines_per_stripe
+            self.remaining = self._pixels_n
+        assert(self._instream.remaining >= self.remaining)
+    def reset(self):
+        self._stripe_start += self._lines_per_strip
+        if self._stripe_start >= self._instream.height:
+            self._instream.reset()
+            self._stripe_start = 0
+            self.height = 0
+        if (self._stripe_start + self._lines_per_stripe) > self._instream.height:
+            self.height = (self._stripe_start + self._lines_per_stripe) - self._instream.height
+            self.remaining = self.width*self.height
+        else:
+            self.height = self._lines_per_stripe
+            self.remaining = self._pixels_n
+        assert(self._instream.remaining >= self.remaining)
+    def skip_pixels(self, n:int) -> None:
+        remaining:int = self.remaining
+        if n > remaining:
+            n = remaining
+        self._instream.skip_pixels(n)
+        remaining -= n
+        self.remaining = remaining
+    def read_pixels(self, buf:memoryview, n:int, offset:int) -> int:
+        remaining:int = self.remaining
+        if remaining == 0:
+            raise EmptyImageStream()
+        if n > remaining:
+            n = remaining
+        r = self._instream.read_pixels(buf, n, offset)
+        remaining -= r
+        self.remaining = remaining
+        return r
+    def info(self) -> str:
+        return "STRIPED_STREAM("+str(self.height)+", "+self._instream.info()+")"
+
+
+
 
 
 
 class MonoImageStream():
+    _16BIT_UNSIGNED_INT = _array_get_int_type(16, True)
     def __init__(self, screen_color_format:ColorFormat, raw_data:memoryview, width:int, height:int):
         if width <= 0 or height <= 0:
             raise Exception("Image must have a positive size greater than 0")
         self._color_format:ColorFormat = screen_color_format
-        self._palette:memoryview = memoryview(array('l', [0, 0xFFFF]))
+        self._palette:memoryview = memoryview(array(self._16BIT_UNSIGNED_INT, [0, 0xFFFF]))
 
         self._raw_data:memoryview = raw_data
         self.width:int = width
@@ -323,7 +441,7 @@ class MonoImageStream():
             n = remaining
 
 
-        palette:ptr32 = ptr32(self._palette)
+        palette:ptr16 = ptr16(self._palette)
         width:int = int(self.width)
 
         raw_data:ptr8 = ptr8(self._raw_data)
@@ -522,6 +640,7 @@ class _LegacyFontWrapper():
 
 _C_TO_RADIANS:float = const(math.pi / 180)
 class WatchGraphics():
+    _8BIT_UNSIGNED_INT = _array_get_int_type(8, True)
 
     def __init__(self, display:DisplayProtocol):
         self.display:DisplayProtocol = display
@@ -541,7 +660,7 @@ class WatchGraphics():
         self._window_x:int = 0
         self._window_y:int = 0
 
-        draw_line_buffer:array = array('b')
+        draw_line_buffer:array = array(self._8BIT_UNSIGNED_INT)
         for _ in range(display.spec.min_dimension*4):
             draw_line_buffer.append(0)
         self._draw_line_buffer:memoryview = memoryview(draw_line_buffer)
