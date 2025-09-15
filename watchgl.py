@@ -914,6 +914,17 @@ class WatchGraphics():
 
 
     #@micropython.native
+    def string_rendered_width(self, s:str) -> int:
+        width:int = 0
+        for c in s:
+            (cpx, ch, cw) = font.get_ch(c)
+            cw2:int = int(cw)
+            width += cw2
+        return width
+
+
+
+    #@micropython.native
     def draw_string(self, color:int, s:str, x:int, y:int):
         window_width:int = self.width
         window_height:int = self.height
@@ -937,6 +948,17 @@ class WatchGraphics():
                 break
             self.blit(cpx, x, y)
 
+    def draw_string_a(self, color:int, s:str, x:int, y:int, align:Alignment):
+        rwidth:int = self.string_rendered_width(s)
+        if align == Alignment.CENTER:
+            offset:int = (rwidth>>1)
+            self.draw_string(color, s, x-offset, y)
+        elif align == Alignment.LEFT:
+            self.draw_string(color, s, x, y)
+        elif align == Alignment.RIGHT:
+            self.draw_string(color, s, x-rwidth, y)
+        else:
+            raise Exception("Shouldnt Happen")
 
 
 
