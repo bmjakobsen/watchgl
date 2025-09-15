@@ -919,7 +919,7 @@ class WatchGraphics():
     #@micropython.native
     def string_bounding_box(self, s:str) -> tuple[int, int]:
         font:_LegacyFontWrapper = self._font
-        height:int = 0
+        height:int = font.height
         width:int = 0
         for c in s:
             cpx = font.get_ch(c)
