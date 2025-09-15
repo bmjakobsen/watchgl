@@ -287,7 +287,7 @@ class HorizontalCropStream(ImageStream):
         return "HORIZONTAL_CROP_STREAM("+str(self._skip_at_start)+", "+str(self.width)+", "+self._instream.info()+")"
 
 class StripedStream(ImageStream):
-    def __init__(self, instream:ImageStream, lines:int) -> None:
+    def __init__(self, instream:ImageStream, lines:int):
         self._lines_per_stripe:int = lines
         self._instream:ImageStream = instream
 
@@ -317,7 +317,7 @@ class StripedStream(ImageStream):
             self.height = self._lines_per_stripe
             self.remaining = self._pixels_n
         assert(self._instream.remaining >= self.remaining)
-    def skip_pixels(self, n:int) -> None:
+    def skip_pixels(self, n:int):
         remaining:int = self.remaining
         if n > remaining:
             n = remaining
@@ -512,36 +512,36 @@ class Component():
         self.weight:int = self.width*self.height
 
         self.draw = draw_function
-        self._state:dict = {}
+        self._state:dict[str, object] = {}
         self.dirty:bool = True
         self._screen:"Screen" = _DUMMY_SCREEN
         self._cid:int = 0
     def register(self, screen:"Screen", cid:int):
         self._screen = screen
         self._cid = cid
-    def init_vars(self, state:dict):
+    def init_vars(self, state:dict[str, object]):
         self._state = state
         if not self.dirty:
             self._screen.notify_component_update(self._cid)
             self.dirty = True
-    def get_var_dict(self) -> dict:
+    def get_var_dict(self) -> dict[str, object]:
         return self._state
-    def get_var(self, k:str):
+    def get_var(self, k:str) -> object:
         return self._state[k]
-    def set_var(self, k:str, v):
+    def set_var(self, k:str, v:object):
         if k in self._state and self._state[k] == v:
             return
         self._state[k] = v
         if not self.dirty:
             self._screen.notify_component_update(self._cid)
             self.dirty = True
-    def set_var_q(self, k:str, v):
+    def set_var_q(self, k:str, v:object):
         self._state[k] = v
 
 
 class Screen():
-    def __init__(self, bgcolor:int, display_spec:DisplaySpec, components):
-        ncomponents = []
+    def __init__(self, bgcolor:int, display_spec:DisplaySpec, components:list['Component']):
+        ncomponents:list['Component'] = []
         if len(components) > 127:
             raise Exception("Too many components")
         cid:int = 1
@@ -575,7 +575,7 @@ class Screen():
             c.register(self, cid)
             ncomponents.append(c)
             cid = cid+1
-        self.components = ncomponents
+        self.components:list['Component'] = ncomponents
         self.update_array = memoryview(bytearray(16))
         for i in range(0,16):
             self.update_array[i] = 0
@@ -917,7 +917,7 @@ class WatchGraphics():
 
     # Returns a tuple of integers
     #@micropython.native
-    def string_bounding_box(self, s:str):
+    def string_bounding_box(self, s:str) -> tuple[int, int]:
         font:_LegacyFontWrapper = self._font
         height:int = 0
         width:int = 0
