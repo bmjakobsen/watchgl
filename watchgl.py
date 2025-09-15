@@ -439,6 +439,8 @@ class MonoImageStream():
             raise EmptyImageStream()
         if n >= remaining:
             n = remaining
+        # Offset is in pixels, but offset is required in bytes
+        offset = (offset<<1)
 
 
         palette:ptr16 = ptr16(self._palette)
