@@ -26,8 +26,6 @@ except Exception:
     pass
 
 
-py_int = builtins.int
-
 
 
 _ARRAY_TEST_MIN_MAX_SIZE = {
@@ -194,7 +192,7 @@ class VerticalCropStream(ImageStream):
         self.remaining = remaining
     @micropython.viper
     def read_pixels(self, buf, n:int, offset:int) -> int:
-        global py_int
+        py_int = builtins.int
         remaining:int = int(self.remaining)
         if remaining == 0:
             raise EmptyImageStream()
@@ -231,7 +229,7 @@ class HorizontalCropStream(ImageStream):
         self._instream.skip_pixels(self._skip_at_start)
     @micropython.viper
     def skip_pixels(self, n:int):
-        global py_int
+        py_int = builtins.int
         remaining:int = int(self.remaining)
         if remaining == 0:
             raise EmptyImageStream()
@@ -258,7 +256,7 @@ class HorizontalCropStream(ImageStream):
         self._remaining_in_line = py_int(rem_in_line)
     @micropython.viper
     def read_pixels(self, buf, n:int, offset:int) -> int:
-        global py_int
+        py_int = builtins.int
         remaining:int = int(self.remaining)
         if remaining == 0:
             raise EmptyImageStream()
@@ -413,7 +411,7 @@ class MonoImageStream(ImageStream):
 
     @micropython.viper
     def skip_pixels(self, n:int):
-        global py_int
+        py_int = builtins.int
         remaining:int = int(self.remaining)
         if n > remaining:
             n = remaining
@@ -447,7 +445,7 @@ class MonoImageStream(ImageStream):
 
     @micropython.viper
     def read_pixels(self, buf, n:int, offset:int) -> int:
-        global py_int
+        py_int = builtins.int
         buf2:ptr8 = ptr8(buf)
         remaining:int = int(self.remaining)
         if remaining == 0:
@@ -584,7 +582,7 @@ class Screen():
         self.update_bitfield:int = 0
     @micropython.viper
     def notify_component_update(self, cid:int):
-        global py_int
+        py_int = builtins.int
         byti:int = cid>>3
         biti:int = cid&0x7
         update_pattern:int = 1<<biti
@@ -594,7 +592,7 @@ class Screen():
         self.update_bitfield = py_int(biti2)
     #@micropython.viper
     def draw(self, display):
-        global py_int
+        py_int = builtins.int
         update_bitfield:int = int(self.update_bitfield)
         if update_bitfield == 0:
             return
@@ -645,7 +643,7 @@ class _LegacyFontWrapper():
         self._bitblit.set_color(0, color)
     def set_fgcolor(self, color:int):
         self._bitblit.set_color(1, color)
-    def get_ch(ch:str) -> MonoImageStream:
+    def get_ch(self, ch:str) -> MonoImageStream:
         (px, h, w) = self._raw_data.get_ch(ch)
         self._bitblit.set_image_data(px, w, h)
         return self._bitblit
@@ -909,7 +907,7 @@ class WatchGraphics():
     def draw_line_polar(self, color:int, x:int, y:int, theta:int, r0:int, r1:int, width:int):
         theta2:float = theta._C_TO_RADIANS
         xdelta:float = math.sin(theta2)
-        ydelta:float = mathcos(theta2)
+        ydelta:float = math.cos(theta2)
         x0:int = x + int(xdelta * r0)
         x1:int = x + int(xdelta * r1)
         y0:int = x - int(ydelta * r0)
@@ -920,6 +918,7 @@ class WatchGraphics():
     # Returns a tuple of integers
     #@micropython.native
     def string_bounding_box(self, s:str):
+        font:_LegacyFontWrapper = self._font
         height:int = 0
         width:int = 0
         for c in s:
@@ -937,7 +936,7 @@ class WatchGraphics():
     def draw_string(self, color:int, s:str, x:int, y:int):
         window_width:int = self.width
         window_height:int = self.height
-        font:LegacyFontWrapper = self._font
+        font:_LegacyFontWrapper = self._font
         font.set_fgcolor(color)
         font_height = font.height()
 
