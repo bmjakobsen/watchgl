@@ -612,11 +612,13 @@ class Screen():
         update_pattern:int = 1<<biti
         byti2:int = int(self.update_array[byti]) | update_pattern
         biti2:int = int(self.update_bitfield) | 1<<byti
+        # TODO: Use pointers to set value
         self.update_array[byti] = py_int(byti2)
         self.update_bitfield = py_int(biti2)
     #@micropython.viper
     def draw(self, display):
         py_int = builtins.int
+        # Use Pointers to set value
         update_bitfield:int = int(self.update_bitfield)
         if update_bitfield == 0:
             return
@@ -677,7 +679,7 @@ class _LegacyFontWrapper():
 
 
 
-_C_TO_RADIANS:float = const(math.pi / 180)
+_C_TO_RADIANS:float = (math.pi / 180)
 class WatchGraphics():
     _8BIT_UNSIGNED_INT = _array_get_int_type(8, True)
 
