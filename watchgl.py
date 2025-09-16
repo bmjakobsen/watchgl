@@ -12,16 +12,23 @@ except ImportError:
     import micropython_faker as micropython
 
 try:
-    ptr8()
+    ptr8(b'\x00')
 except NameError:
     ptr8 = memoryview
 except Exception:
     pass
 
 try:
-    ptr16()
+    ptr16(b'\x00')
 except NameError:
     ptr16 = memoryview
+except Exception:
+    pass
+
+try:
+    ptr32(b'\x00')
+except NameError:
+    ptr32 = memoryview
 except Exception:
     pass
 
@@ -113,15 +120,15 @@ class Alignment():
 
 
 class DisplaySpec():
-    def __init__(self, width:int, height:int, color_format:ColorFormat):
+    def __init__(self, width:int, height:int, color_format:int):
         self.width:int = width
         self.height:int = height
         self.color_format:int = color_format
         self.max_dimension:int = width
         self.min_dimension:int = height
         if height > width:
-            self.max_dimension:int = height
-            self.min_dimension:int = width
+            self.max_dimension = height
+            self.min_dimension = width
 
 class ImageStream():
     width: int
@@ -181,7 +188,7 @@ class VerticalCropStream(ImageStream):
     def reset(self):
         self._instream.reset()
         self._instream.skip_pixels(self._skip)
-        self.remaining:int = self._pixels_n
+        self.remaining = self._pixels_n
         assert(self._instream.remaining >= self.remaining)
     def skip_pixels(self, n:int):
         remaining:int = self.remaining
@@ -204,7 +211,16 @@ class VerticalCropStream(ImageStream):
         return r
     def info(self) -> str:
         return "VERTICAL_CROP_STREAM("+str(self._skip_lines)+", "+str(self.height)+", "+self._instream.info()+")"
+
+
+_HCS_WIDTH = const(0)
+_HCS_HEIGHT = const(1)
+_HCS_SKIP = const(2)
+_HCS_REM_IN_L = const(3)
+
+
 class HorizontalCropStream(ImageStream):
+    _32BIT_UNSIGNED_INT = _array_get_int_type(32, True)
     def __init__(self, instream:ImageStream, skip:int, width:int):
         self.height:int = instream.height
         if skip+width > instream.width:
@@ -213,18 +229,32 @@ class HorizontalCropStream(ImageStream):
         self._instream:ImageStream = instream
         self._pixels_n:int = self.height*self.width
 
+        self.remaining:int = self._pixels_n
+
+
+        # Amount that is skipped at the start of a line
         self._skip_at_start:int = skip
+
+        # Amoung that is skipped between two lines
         self._skip:int = instream.width-width
 
-        self.remaining:int = self._pixels_n
-        self._remaining_in_line:int = self.width
+        # State for easy access by viper code
+        if not hasattr(self, '_extra_state'):
+            self._extra_state:memoryview = memoryview(array(self._32BIT_UNSIGNED_INT, [0, 0, 0, 0]))
+        self._extra_state[_HCS_WIDTH] = self.width
+        self._extra_state[_HCS_HEIGHT] = self.height
+        self._extra_state[_HCS_SKIP] = self._skip
+
+        # Remaining in line
+        self._extra_state[_HCS_REM_IN_L] = self.width
+
         assert(self._instream.remaining >= self.remaining+self.height*self._skip)
         self._instream.skip_pixels(self._skip_at_start)
 
     def reset(self):
         self._instream.reset()
-        self.remaining:int = self._pixels_n
-        self._remaining_in_line:int = self.width
+        self.remaining = self._pixels_n
+        self._extra_state[_HCS_REM_IN_L] = self.width
         assert(self._instream.remaining >= self.remaining+self.height*self._skip)
         self._instream.skip_pixels(self._skip_at_start)
     @micropython.viper
@@ -236,24 +266,22 @@ class HorizontalCropStream(ImageStream):
         if n > remaining:
             n = remaining
 
+        state:ptr32 = ptr32(self._extra_state)
+
         skip_total:int = 0
-        skip:int = int(self._skip)
-        rem_in_line:int = int(self._remaining_in_line)
-        width:int = int(self.width)
         while n > 0:
-            if n >= rem_in_line:
-                skip_total += rem_in_line+skip
-                n -= rem_in_line
-                remaining -= rem_in_line
-                rem_in_line = width
+            if n >= state[_HCS_REM_IN_L]:
+                skip_total += state[_HCS_REM_IN_L]+state[_HCS_SKIP]
+                n -= state[_HCS_REM_IN_L]
+                remaining -= state[_HCS_REM_IN_L]
+                state[_HCS_REM_IN_L] = state[_HCS_WIDTH]
             else:
                 skip_total += n
-                rem_in_line -= n
+                state[_HCS_REM_IN_L] -= n
                 remaining -= n
                 n = 0
         self._instream.skip_pixels(skip_total)
         self.remaining = py_int(remaining)
-        self._remaining_in_line = py_int(rem_in_line)
     @micropython.viper
     def read_pixels(self, buf, n:int, offset:int) -> int:
         py_int = builtins.int
@@ -262,26 +290,26 @@ class HorizontalCropStream(ImageStream):
             raise EmptyImageStream()
         if n > remaining:
             n = remaining
+
+
+        state:ptr32 = ptr32(self._extra_state)
+
         read_bytes:int = 0
-        rem_in_line:int = int(self._remaining_in_line)
-        skip:int = int(self._skip)
-        width:int = int(self.width)
         while n > 0:
-            if n >= rem_in_line:
-                r = int(self._instream.read_pixels(buf, rem_in_line, offset+read_bytes))
+            if n >= state[_HCS_REM_IN_L]:
+                r = int(self._instream.read_pixels(buf, state[_HCS_REM_IN_L], offset+read_bytes))
                 read_bytes += r
-                n -= rem_in_line
-                self._instream.skip_pixels(skip)
-                remaining -= rem_in_line
-                rem_in_line = width
+                n -= state[_HCS_REM_IN_L]
+                self._instream.skip_pixels(state[_HCS_SKIP])
+                remaining -= state[_HCS_REM_IN_L]
+                state[_HCS_REM_IN_L] = state[_HCS_WIDTH]
             else:
                 r = int(self._instream.read_pixels(buf, n, offset+read_bytes))
                 read_bytes += r
-                rem_in_line -= n
+                state[_HCS_REM_IN_L] -= n
                 remaining -= n
                 n = 0
         self.remaining = py_int(remaining)
-        self._remaining_in_line = py_int(rem_in_line)
         return read_bytes
     def info(self) -> str:
         return "HORIZONTAL_CROP_STREAM("+str(self._skip_at_start)+", "+str(self.width)+", "+self._instream.info()+")"
@@ -305,7 +333,7 @@ class StripedStream(ImageStream):
             self.remaining = self._pixels_n
         assert(self._instream.remaining >= self.remaining)
     def reset(self):
-        self._stripe_start += self._lines_per_strip
+        self._stripe_start += self._lines_per_stripe
         if self._stripe_start >= self._instream.height:
             self._instream.reset()
             self._stripe_start = 0
@@ -340,15 +368,24 @@ class StripedStream(ImageStream):
 
 
 
+_MIS_WIDTH = const(0)
+_MIS_HEIGHT = const(1)
+_MIS_CBYTE = const(2)
+_MIS_INDEX = const(3)
+_MIS_REM_IN_L = const(4)
+_MIS_REM_IN_B = const(5)
 
 
 class MonoImageStream(ImageStream):
     _16BIT_UNSIGNED_INT = _array_get_int_type(16, True)
-    def __init__(self, screen_color_format:ColorFormat, raw_data:memoryview, width:int, height:int):
+    _32BIT_UNSIGNED_INT = _array_get_int_type(32, True)
+    def __init__(self, screen_color_format:int, raw_data:memoryview, width:int, height:int):
         if width <= 0 or height <= 0:
             raise Exception("Image must have a positive size greater than 0")
-        self._color_format:ColorFormat = screen_color_format
-        self._palette:memoryview = memoryview(array(self._16BIT_UNSIGNED_INT, [0, 0xFFFF]))
+        self._color_format:int = screen_color_format
+
+        if not hasattr(self, '_palette'):
+            self._palette:memoryview = memoryview(array(self._16BIT_UNSIGNED_INT, [0, 0xFFFF]))
 
         self._raw_data:memoryview = raw_data
         self.width:int = width
@@ -357,12 +394,26 @@ class MonoImageStream(ImageStream):
 
         # Set State required for reading the image
         self.remaining:int = self._n_pixels
-        self._cbyte:int = self._raw_data[0]
-        self._index:int = 0
-        self._remaining_in_line:int = self.width
-        self._remaining_in_byte:int = 8
-        if self._remaining_in_line < 8:
-            self._remaining_in_byte:int = self._remaining_in_line
+
+        if not hasattr(self, '_extra_state'):
+            self._extra_state:memoryview = memoryview(array(self._32BIT_UNSIGNED_INT, [0, 0, 0, 0, 0, 0]))
+
+        # Width
+        self._extra_state[_MIS_WIDTH] = self.width
+        # Height
+        self._extra_state[_MIS_HEIGHT] = self.height
+
+
+        #cbyte
+        self._extra_state[_MIS_CBYTE] = self._raw_data[0]
+        #index
+        self._extra_state[_MIS_INDEX] = 0
+        # Remaining in line
+        self._extra_state[_MIS_REM_IN_L] = self.width
+        # Remaining in byte
+        self._extra_state[_MIS_REM_IN_B] = 8
+        if self._extra_state[_MIS_REM_IN_L] < 8:
+            self._extra_state[_MIS_REM_IN_B] = self._extra_state[_MIS_REM_IN_L]
 
 
     def set_color(self, n:int, color:int):
@@ -371,7 +422,7 @@ class MonoImageStream(ImageStream):
         if n < 0:
             raise Exception("Negative Color given")
         color &= 0xFFFF
-        cf:ColorFormat = self.color_format
+        cf:int = self._color_format
         if cf == ColorFormat.RGB565:
             self._palette[n] = color
         elif cf == ColorFormat.RGB565_R:
@@ -381,33 +432,21 @@ class MonoImageStream(ImageStream):
         else:
             raise Exception("Unknown Color format specified")
 
-    def set_image_data(self, raw_data:memoryview, width:int, height:int):
-        if width <= 0 or height <= 0:
-            raise Exception("Image must have a positive size greater than 0")
-        self._raw_data:memoryview = raw_data
-        self.width:int = width
-        self.height:int = height
-        self._n_pixels:int = width*height
-
-        # Set State required for reading the image
-        self.remaining:int = self._n_pixels
-        self._cbyte:int = self._raw_data[0]
-        self._index:int = 0
-        self._remaining_in_line:int = self.width
-        self._remaining_in_byte:int = 8
-        if self._remaining_in_line < 8:
-            self._remaining_in_byte:int = self._remaining_in_line
-
 
     def reset(self):
         # Set State required for reading the image
-        self.remaining:int = self._n_pixels
-        self._cbyte:int = self._raw_data[0]
-        self._index:int = 0
-        self._remaining_in_line:int = self.width
-        self._remaining_in_byte:int = 8
-        if self._remaining_in_line < 8:
-            self._remaining_in_byte:int = self._remaining_in_line
+        self.remaining = self._n_pixels
+
+        #cbyte
+        self._extra_state[2] = self._raw_data[0]
+        #index
+        self._extra_state[3] = 0
+        # Remaining in line
+        self._extra_state[4] = self.width
+        # Remaining in byte
+        self._extra_state[5] = 8
+        if self._extra_state[4] < 8:
+            self._extra_state[5] = self._extra_state[2]
 
     @micropython.viper
     def skip_pixels(self, n:int):
@@ -416,31 +455,24 @@ class MonoImageStream(ImageStream):
         if n > remaining:
             n = remaining
 
-        width:int = int(self.width)
+        state:ptr32 = ptr32(self._extra_state)
+
         raw_data:ptr8 = ptr8(self._raw_data)
-        cbyte:int = int(self._cbyte)
-        index:int = int(self._index)
-        rem_in_b:int = int(self._remaining_in_byte)
-        rem_in_l:int = int(self._remaining_in_line)
         for _ in range(n):
-            cbyte >>= 1
-            rem_in_b -= 1
-            rem_in_l -= 1
+            state[_MIS_CBYTE] >>= 1
+            state[_MIS_REM_IN_B] -= 1
+            state[_MIS_REM_IN_L] -= 1
             remaining -= 1
             if remaining <= 0:
                 break
-            if rem_in_b == 0:
-                rem_in_b = 8
-                if rem_in_l == 0:
-                    rem_in_l = width
-                elif rem_in_l < 8:
-                    rem_in_b = rem_in_l
-                index += 1
-                cbyte = raw_data[index]
-        self._cbyte = py_int(cbyte)
-        self._index = py_int(index)
-        self._remaining_in_byte = py_int(rem_in_b)
-        self._remaining_in_line = py_int(rem_in_l)
+            if state[_MIS_REM_IN_B] == 0:
+                state[_MIS_REM_IN_B] = 8
+                if state[_MIS_REM_IN_L] == 0:
+                    state[_MIS_REM_IN_L] = state[_MIS_WIDTH]
+                elif state[_MIS_REM_IN_L] < 8:
+                    state[_MIS_REM_IN_B] = state[_MIS_REM_IN_L]
+                state[_MIS_INDEX] += 1
+                state[_MIS_CBYTE] = raw_data[state[_MIS_INDEX]]
         self.remaining = py_int(remaining)
 
     @micropython.viper
@@ -457,39 +489,31 @@ class MonoImageStream(ImageStream):
 
 
         palette:ptr16 = ptr16(self._palette)
-        width:int = int(self.width)
+
+        state:ptr32 = ptr32(self._extra_state)
 
         raw_data:ptr8 = ptr8(self._raw_data)
-        cbyte:int = int(self._cbyte)
-        index:int = int(self._index)
-        rem_in_b:int = int(self._remaining_in_byte)
-        rem_in_l:int = int(self._remaining_in_line)
 
         for _ in range(n):
-            color:int = palette[cbyte&1]
+            color:int = palette[state[_MIS_CBYTE]&1]
             buf2[offset] = color&0xFF
             buf2[offset+1] = (color>>8)&0xFF
             offset += 2
 
-            cbyte >>= 1
-            rem_in_b -= 1
-            rem_in_l -= 1
+            state[_MIS_CBYTE] >>= 1
+            state[_MIS_REM_IN_B] -= 1
+            state[_MIS_REM_IN_L] -= 1
             remaining -= 1
             if remaining <= 0:
                 break
-            if rem_in_b == 0:
-                rem_in_b = 8
-                if rem_in_l == 0:
-                    rem_in_l = width
-                elif rem_in_l < 8:
-                    rem_in_b = rem_in_l
-                index += 1
-                cbyte = raw_data[index]
-        self._cbyte = py_int(cbyte)
-        self._index = py_int(index)
-        self._remaining_in_byte = py_int(rem_in_b)
-        self._remaining_in_line = py_int(rem_in_l)
-
+            if state[_MIS_REM_IN_B] == 0:
+                state[_MIS_REM_IN_B] = 8
+                if state[_MIS_REM_IN_L] == 0:
+                    state[_MIS_REM_IN_L] = state[_MIS_WIDTH]
+                elif state[_MIS_REM_IN_L] < 8:
+                    state[_MIS_REM_IN_B] = state[_MIS_REM_IN_L]
+                state[_MIS_INDEX] += 1
+                state[_MIS_CBYTE] = raw_data[state[_MIS_INDEX]]
         self.remaining = py_int(remaining)
         return n
 
@@ -554,10 +578,10 @@ class Screen():
         self.bounds_x1:int = -1
         self.bounds_y1:int = -1
         if len(components) > 0:
-            self.bounds_x0:int = components[0].x
-            self.bounds_y0:int = components[0].y
-            self.bounds_x1:int = self.bounds_x0+components[0].width-1
-            self.bounds_y1:int = self.bounds_y0+components[0].height-1
+            self.bounds_x0 = components[0].x
+            self.bounds_y0 = components[0].y
+            self.bounds_x1 = self.bounds_x0+components[0].width-1
+            self.bounds_y1 = self.bounds_y0+components[0].height-1
 
 
         for c in components:
@@ -638,6 +662,7 @@ class _LegacyFontWrapper():
         self.min_ch:int = int(font_data.min_ch())
         self.max_ch:int = int(font_data.max_ch())
         self._raw_data = font_data
+        self._cf:int = bitblit._color_format
         self._bitblit:MonoImageStream = bitblit
     def set_bgcolor(self, color:int):
         self._bitblit.set_color(0, color)
@@ -645,8 +670,9 @@ class _LegacyFontWrapper():
         self._bitblit.set_color(1, color)
     def get_ch(self, ch:str) -> MonoImageStream:
         (px, h, w) = self._raw_data.get_ch(ch)
-        self._bitblit.set_image_data(px, w, h)
-        return self._bitblit
+        bitblit:MonoImageStream = self._bitblit
+        bitblit.__init__(self._cf, px, w, h)
+        return bitblit
 
 
 
@@ -663,8 +689,8 @@ class WatchGraphics():
         # TODO FIX DEFAULT FONT
 
         self.bgcolor = 0
-        self.state:GraphicsState = GraphicsState.Initial
-        self.scroll_direction:Direction = Direction.Up
+        self.graphics_state:int = GraphicsState.Initial
+        self.scroll_direction:int = Direction.Up
         self.scroll_stripe_size:int = 20            #FIX # TODO Select better source of value
         self.scroll_y_shift:int = 0
 
@@ -905,7 +931,7 @@ class WatchGraphics():
 
     #@micropython.native
     def draw_line_polar(self, color:int, x:int, y:int, theta:int, r0:int, r1:int, width:int):
-        theta2:float = theta._C_TO_RADIANS
+        theta2:float = theta*_C_TO_RADIANS
         xdelta:float = math.sin(theta2)
         ydelta:float = math.cos(theta2)
         x0:int = x + int(xdelta * r0)
@@ -938,7 +964,7 @@ class WatchGraphics():
         window_height:int = self.height
         font:_LegacyFontWrapper = self._font
         font.set_fgcolor(color)
-        font_height = font.height()
+        font_height = font.height
 
         if y >= window_height:
             return
@@ -977,7 +1003,7 @@ class WatchGraphics():
 
 _DUMMY_SCREEN:Screen = Screen(0, DisplaySpec(0, 0, ColorFormat.RGB565), [])
 class DummyDisplay(DisplayProtocol):
-    def __init__(self, width:int, height:int, color_format:ColorFormat=ColorFormat.RGB565):
+    def __init__(self, width:int, height:int, color_format:int=ColorFormat.RGB565):
         self.spec = DisplaySpec(width, height, color_format)
     def wgl_fill(self, color:int, x:int, y:int, width:int, height:int):
         print("FILL "+hex(color)+", X:"+str(x)+", Y:"+str(y)+", W:"+str(width)+", H:"+str(height))
