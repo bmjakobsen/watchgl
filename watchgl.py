@@ -171,6 +171,8 @@ class EmptyImageStream(Exception):
 
 class VerticalCropStream(ImageStream):
     def __init__(self, instream:ImageStream, skip:int, height:int):
+        self._setup(instream, skip, height)
+    def _setup(self, instream:ImageStream, skip:int, height:int):
         self.width:int = instream.width
         if skip+height > instream.height:
             height = height-(skip+height-instream.height)
@@ -222,6 +224,8 @@ _HCS_REM_IN_L = const(3)
 class HorizontalCropStream(ImageStream):
     _32BIT_UNSIGNED_INT = _array_get_int_type(32, True)
     def __init__(self, instream:ImageStream, skip:int, width:int):
+        self._setup(instream, skip, width)
+    def _setup(self, instream:ImageStream, skip:int, width:int):
         self.height:int = instream.height
         if skip+width > instream.width:
             width = width-(skip+width-instream.width)
@@ -380,9 +384,11 @@ class MonoImageStream(ImageStream):
     _16BIT_UNSIGNED_INT = _array_get_int_type(16, True)
     _32BIT_UNSIGNED_INT = _array_get_int_type(32, True)
     def __init__(self, screen_color_format:int, raw_data:memoryview, width:int, height:int):
+        self._color_format:int = screen_color_format
+        self._setup(raw_data, width, height)
+    def _setup(self, raw_data:memoryview, width:int, height:int):
         if width <= 0 or height <= 0:
             raise Exception("Image must have a positive size greater than 0")
-        self._color_format:int = screen_color_format
 
         if not hasattr(self, '_palette'):
             self._palette:memoryview = memoryview(array(self._16BIT_UNSIGNED_INT, [0, 0xFFFF]))
@@ -664,7 +670,6 @@ class _LegacyFontWrapper():
         self.min_ch:int = int(font_data.min_ch())
         self.max_ch:int = int(font_data.max_ch())
         self._raw_data = font_data
-        self._cf:int = bitblit._color_format
         self._bitblit:MonoImageStream = bitblit
     def set_bgcolor(self, color:int):
         self._bitblit.set_color(0, color)
@@ -673,7 +678,7 @@ class _LegacyFontWrapper():
     def get_ch(self, ch:str) -> MonoImageStream:
         (px, h, w) = self._raw_data.get_ch(ch)
         bitblit:MonoImageStream = self._bitblit
-        bitblit.__init__(self._cf, px, w, h)
+        bitblit._setup(px, w, h)
         return bitblit
 
 
@@ -706,8 +711,8 @@ class WatchGraphics():
             draw_line_buffer.append(0)
         self._draw_line_buffer:memoryview = memoryview(draw_line_buffer)
 
-        self._crop_v_stream:ImageStream = VerticalCropStream(DummyImageStream(1, 1), 0, 1)
-        self._crop_h_stream:ImageStream = HorizontalCropStream(DummyImageStream(1, 1), 0, 1)
+        self._crop_v_stream:VerticalCropStream = VerticalCropStream(DummyImageStream(1, 1), 0, 1)
+        self._crop_h_stream:HorizontalCropStream = HorizontalCropStream(DummyImageStream(1, 1), 0, 1)
 
 
     def _set_window(self, x:int, y:int, width:int, height:int, shift_x:int, shift_y:int):
@@ -749,8 +754,8 @@ class WatchGraphics():
             new_height:int = image_height-reduce_by_lines
             if new_height <= 0:
                 return
-            croppedy = self._crop_v_stream
-            croppedy.__init__(image, skip_lines, new_height)
+            croppedy:VerticalCropStream = self._crop_v_stream
+            croppedy._setup(image, skip_lines, new_height)
             image = croppedy
             y += skip_lines
 
@@ -758,8 +763,8 @@ class WatchGraphics():
             new_width:int = image_width-reduce_by_cols
             if new_width <= 0:
                 return
-            croppedx:ImageStream = self._crop_h_stream
-            croppedx.__init__(image, skip_cols, new_width)
+            croppedx:HorizontalCropStream = self._crop_h_stream
+            croppedx._setup(image, skip_cols, new_width)
             image = croppedx
             x += skip_cols
 
