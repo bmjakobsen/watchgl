@@ -214,7 +214,7 @@ class HorizontalCropStream(ImageStream):
         self._pixels_n:int = self.height*self.width
 
         self._skip_at_start:int = skip
-        self._skip:int = instream.width-(skip+width)
+        self._skip:int = instream.width-width
 
         self.remaining:int = self._pixels_n
         self._remaining_in_line:int = self.width
