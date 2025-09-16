@@ -174,6 +174,8 @@ class VerticalCropStream(ImageStream):
         self._setup(instream, skip, height)
     def _setup(self, instream:ImageStream, skip:int, height:int):
         self.width:int = instream.width
+        if height > instream.height:
+            raise Exception("Cropped height greater than source height")
         if skip+height > instream.height:
             height = height-(skip+height-instream.height)
         self.height:int = height
@@ -227,6 +229,8 @@ class HorizontalCropStream(ImageStream):
         self._setup(instream, skip, width)
     def _setup(self, instream:ImageStream, skip:int, width:int):
         self.height:int = instream.height
+        if width > instream.width:
+            raise Exception("Cropped width greater than source width")
         if skip+width > instream.width:
             width = width-(skip+width-instream.width)
         self.width:int = width
