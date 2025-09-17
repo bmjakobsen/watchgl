@@ -4,29 +4,34 @@ import math
 import builtins
 
 try:
-    from micropython import const
-    import micropython
+    from micropython import const       # type: ignore[import-not-found]
+    import micropython                  # type: ignore[import-not-found]
 except ImportError:
     print("Using Micropython Faker Library")
     from micropython_faker import const
     import micropython_faker as micropython
 
 try:
-    ptr8(b'\x00')
+    from typing import Protocol
+except ImportError:
+    Protocol = object           # type: ignore[assignment]
+
+try:
+    ptr8(b'\x00')               # type: ignore[used-before-def]
 except NameError:
     ptr8 = memoryview
 except Exception:
     pass
 
 try:
-    ptr16(b'\x00')
+    ptr16(b'\x00')              # type: ignore[used-before-def]
 except NameError:
     ptr16 = memoryview
 except Exception:
     pass
 
 try:
-    ptr32(b'\x00')
+    ptr32(b'\x00')              # type: ignore[used-before-def]
 except NameError:
     ptr32 = memoryview
 except Exception:
@@ -130,7 +135,7 @@ class DisplaySpec():
             self.max_dimension = height
             self.min_dimension = width
 
-class ImageStream():
+class ImageStream(Protocol):
     width: int
     height: int
     remaining: int
@@ -149,7 +154,7 @@ class ImageStream():
 
 
 
-class DisplayProtocol():
+class DisplayProtocol(Protocol):
     spec: DisplaySpec
 
     def wgl_fill(self, color:int, x:int, y:int, width:int, height:int):
@@ -169,7 +174,7 @@ class EmptyImageStream(Exception):
 
 
 
-class VerticalCropStream(ImageStream):
+class VerticalCropStream():
     def __init__(self, instream:ImageStream, skip:int, height:int):
         self._setup(instream, skip, height)
     def _setup(self, instream:ImageStream, skip:int, height:int):
@@ -223,7 +228,7 @@ _HCS_SKIP = const(2)
 _HCS_REM_IN_L = const(3)
 
 
-class HorizontalCropStream(ImageStream):
+class HorizontalCropStream():
     _32BIT_UNSIGNED_INT = _array_get_int_type(32, True)
     def __init__(self, instream:ImageStream, skip:int, width:int):
         self._setup(instream, skip, width)
@@ -322,7 +327,7 @@ class HorizontalCropStream(ImageStream):
     def info(self) -> str:
         return "HORIZONTAL_CROP_STREAM("+str(self._skip_at_start)+", "+str(self.width)+", "+self._instream.info()+")"
 
-class StripedStream(ImageStream):
+class StripedStream():
     def __init__(self, instream:ImageStream, lines:int):
         self._lines_per_stripe:int = lines
         self._instream:ImageStream = instream
@@ -384,7 +389,7 @@ _MIS_REM_IN_L = const(4)
 _MIS_REM_IN_B = const(5)
 
 
-class MonoImageStream(ImageStream):
+class MonoImageStream():
     _16BIT_UNSIGNED_INT = _array_get_int_type(16, True)
     _32BIT_UNSIGNED_INT = _array_get_int_type(32, True)
     def __init__(self, screen_color_format:int, raw_data:memoryview, width:int, height:int):
@@ -1028,7 +1033,7 @@ class DummyDisplay(DisplayProtocol):
     def wgl_blit(self, image:ImageStream, x:int, y:int):
         print("BLIT IMAGE:    X:"+str(x)+", Y:"+str(y)+", W:"+str(image.width)+", H:"+str(image.height))
         print("  "+image.info())
-class DummyImageStream(ImageStream):
+class DummyImageStream():
     def __init__(self, width:int, height:int):
         self.width:int = width
         self.height:int = height
