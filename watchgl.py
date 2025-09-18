@@ -169,8 +169,12 @@ class DisplayProtocol(Protocol):
 
 
 
-_STREAM_XS_INIT4 = [0, 0, 0, 0]
-_STREAM_XS_INIT8 = [0, 0, 0, 0, 0, 0, 0, 0]
+def _zero_generator(n:int) -> int:
+    n2 = n
+    while n2 > 0:
+        n2 -= 1
+        yield 0
+
 _SX_WIDTH = const(0)
 _SX_HEIGHT = const(1)
 _SX_REMAINING = const(2)
@@ -179,7 +183,7 @@ _SX_REMAINING = const(2)
 class VerticalCropStream():
     _32BIT_SIGNED_INT = _array_get_int_type(32, unsigned=False)
     def __init__(self, instream:ImageStream, skip:int, height:int):
-        self._extra_state:memoryview = memoryview(array(self._32BIT_SIGNED_INT, _STREAM_XS_INIT4))
+        self._extra_state:memoryview = memoryview(array(self._32BIT_SIGNED_INT, _zero_generator(3)))
         self._setup(instream, skip, height)
     def _setup(self, instream:ImageStream, skip:int, height:int):
         self.width:int = instream.width
@@ -240,7 +244,7 @@ _HCS_REM_IN_L = const(4)
 class HorizontalCropStream():
     _32BIT_SIGNED_INT = _array_get_int_type(32, unsigned=False)
     def __init__(self, instream:ImageStream, skip:int, width:int):
-        self._extra_state:memoryview = memoryview(array(self._32BIT_SIGNED_INT, _STREAM_XS_INIT8))
+        self._extra_state:memoryview = memoryview(array(self._32BIT_SIGNED_INT, _zero_generator(5)))
         self._setup(instream, skip, width)
     def _setup(self, instream:ImageStream, skip:int, width:int):
         self.height:int = instream.height
@@ -424,7 +428,7 @@ class MonoImageStream():
     def __init__(self, screen_color_format:int, raw_data:memoryview, width:int, height:int):
         self._color_format:int = screen_color_format
         self._palette:memoryview = memoryview(array(self._16BIT_UNSIGNED_INT, _PALETTE2_INITALIZER))
-        self._extra_state:memoryview = memoryview(array(self._32BIT_SIGNED_INT, _STREAM_XS_INIT8))
+        self._extra_state:memoryview = memoryview(array(self._32BIT_SIGNED_INT, _zero_generator(7)))
         self._setup(raw_data, width, height)
     def _setup(self, raw_data:memoryview, width:int, height:int):
         if width <= 0 or height <= 0:
@@ -509,7 +513,10 @@ class MonoImageStream():
         rem_in_b:int = state[_MIS_REM_IN_B]
         rem_in_l:int = state[_MIS_REM_IN_L]
 
-        for _ in range(n):
+        n2:int = n
+        while n2 > 0:
+            n2 -= 1
+
             cbyte >>= 1
             rem_in_b -= 1
             rem_in_l -= 1
@@ -553,7 +560,10 @@ class MonoImageStream():
         rem_in_b:int = state[_MIS_REM_IN_B]
         rem_in_l:int = state[_MIS_REM_IN_L]
 
-        for _ in range(n):
+        n2:int = n
+        while n2 > 0:
+            n2 -= 1
+
             color:int = palette[cbyte&1]
             buf2[offset] = color&0xFF
             buf2[offset+1] = (color>>8)&0xFF
@@ -763,10 +773,7 @@ class WatchGraphics():
         self._window_x:int = 0
         self._window_y:int = 0
 
-        draw_line_buffer:array = array(self._8BIT_UNSIGNED_INT)
-        for _ in range(display.spec.min_dimension*4):
-            draw_line_buffer.append(0)
-        self._draw_line_buffer:memoryview = memoryview(draw_line_buffer)
+        self._draw_line_buffer:memoryview = memoryview(array(self._8BIT_UNSIGNED_INT, _zero_generator(display.spec.min_dimension*4)))
 
         self._crop_v_stream:VerticalCropStream = VerticalCropStream(DummyImageStream(1, 1), 0, 1)
         self._crop_h_stream:HorizontalCropStream = HorizontalCropStream(DummyImageStream(1, 1), 0, 1)
