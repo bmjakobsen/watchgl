@@ -169,8 +169,9 @@ class DisplayProtocol(Protocol):
 
     def wgl_fill(self, color:int, x:int, y:int, width:int, height:int):
         pass
-    def wgl_fill_seq(self, color:int, x:int, y:int, data:memoryview, n:int):
-        pass
+    # Removed as it is probably not necessary, and that the buffers needed to use would cause more problems
+    #def wgl_fill_seq(self, color:int, x:int, y:int, data:memoryview, n:int):
+    #    pass
     def wgl_blit(self, image:ImageStream, x:int, y:int):
         pass
 
@@ -178,7 +179,7 @@ class DisplayProtocol(Protocol):
 
 
 
-def _zero_generator(n:int) -> int:
+def _zero_generator(n:int):
     n2 = n
     while n2 > 0:
         n2 -= 1
@@ -782,9 +783,6 @@ class WatchGraphics():
         self._window_x:int = 0
         self._window_y:int = 0
 
-        # Init Buffer for needed for drawing lines
-        self._draw_line_buffer:memoryview = memoryview(array(self._8BIT_UNSIGNED_INT, _zero_generator(display.spec.min_dimension*4)))
-
         # Init Crop Streamers used for Blitting images that dont fit in their components
         self._crop_v_stream:VerticalCropStream = VerticalCropStream(DummyImageStream(1, 1), 0, 1)
         self._crop_h_stream:HorizontalCropStream = HorizontalCropStream(DummyImageStream(1, 1), 0, 1)
@@ -879,8 +877,6 @@ class WatchGraphics():
     # into bigger operations to draw orthogonal lines.
     @micropython.viper
     def draw_line(self, color:int, width:int, x0:int, y0:int, x1:int, y1:int):
-        display = self.display
-
         # Line Thickness offset
         ltoff:int = (width-1)//2
 
@@ -889,9 +885,6 @@ class WatchGraphics():
         y0 -= ltoff
         x1 -= ltoff
         y1 -= ltoff
-
-        start_x:int = x0+int(self._window_x)
-        start_y:int = y0+int(self._window_y)
 
         dx:int = int(abs(x1 - x0))
         dy:int = int(-abs(y1 - y0))
@@ -919,8 +912,12 @@ class WatchGraphics():
             return
 
 
+        xshift:int = int(self._window_x)
+        x0 += xshift
+        x1 += xshift
+
         # Shift content by y
-        yshift:int = int(self.scroll_y_shift)
+        yshift:int = int(self.scroll_y_shift)+int(self._window_y)
         y0 += yshift
         y1 += yshift
 
@@ -931,72 +928,78 @@ class WatchGraphics():
         sy:int = 1 if (y0 < y1) else -1
 
 
-        buffer:ptr8 = ptr8(self._draw_line_buffer)
-        pos:int = 0
-        remaining_repeats = 0           # Number of fills that can be coalesced into the last fill
-
-
         dx_x2:int = dx<<1
         dy_x2:int = dy<<1
 
-        last_x0 = x0
-        last_y0 = y0
+
+        fill_x:int = -1
+        fill_y:int = -1
+        fill_w:int = -1
+        fill_h:int = -1
 
         error:int = dx_x2+dy_x2
         window_width:int = int(self.width)
         window_height:int = int(self.height)
+
+        wgl_fill = self.display.wgl_fill
+
         while True:
-            width_change:int = 0
-            height_change:int = 0
+            # Cropping the current point so it doesnt overdraw
+            rx0:int = x0
+            ry0:int = y0
 
-            max_width:int = window_width-x0
-            max_height:int = window_height-y0
-            max_y:int = y0+width-1
+            rwidth:int = width
+            rheight:int = width
 
-            x02:int = x0
-            y02:int = y0
+            if rx0 < 0:
+                rwidth += rx0
+                rx0 = 0
+            if ry0 < 0:
+                rheight += ry0
+                ry0 = 0
 
-            if x02 < 0:
-                x02 = 0
-                width_change += x02
-            if width > max_width:
-                width_change += max_width-width
-            if y02 < 0:
-                y02 = 0
-                height_change += y02
-            if width > max_height:
-                height_change += max_height-width
+            max_width:int = window_width-rx0
+            max_height:int = window_height-ry0
 
-            rwidth:int = width+width_change
-            rheight:int = width+height_change
+            if rwidth > max_width:
+                rwidth += max_width-rwidth
+            if rheight > max_height:
+                rheight += max_height-rheight
 
-            x_offset:int = x02-last_x0
-            y_offset:int = y02-last_y0
+            # Check how much the x and y coordinates differ from the current fill operation
+            # Note: Since y/rx0 are guaranteed to be zero or greater, x_offset and y_offset cant be 0 if fill_x is -1
+            x_offset:int = rx0-fill_x
+            y_offset:int = ry0-fill_y
+
             if rwidth <= 0 or rheight <= 0:
-                remaining_repeats = 0
-            elif y_offset == 0 and rheight == buffer[pos-4+3] and remaining_repeats > 0:
+                if fill_x != -1:
+                    wgl_fill(color, fill_x, fill_y, fill_w, fill_h)
+                    fill_x = -1
+                    fill_y = -1
+            elif y_offset == 0 and x_offset == 0:
+                if rheight > fill_h:
+                    fill_h = rheight
+                if rwidth > fill_w:
+                    fill_w = rwidth
+            elif y_offset == 0 and rheight == fill_h:
                 if x_offset < 0:
-                    buffer[pos-4+0] += x_offset
-                    buffer[pos-4+2] -= x_offset
+                    fill_x += x_offset
+                    fill_w -= x_offset
                 else:
-                    buffer[pos-4+2] += x_offset
-                remaining_repeats -= 1
-            elif x_offset == 0 and rwidth == buffer[pos-4+2] and remaining_repeats > 0:
+                    fill_w += x_offset
+            elif x_offset == 0 and rwidth == fill_w:
                 if y_offset < 0:
-                    buffer[pos-4+1] += y_offset
-                    buffer[pos-4+3] -= y_offset
+                    fill_y += y_offset
+                    fill_h -= y_offset
                 else:
-                    buffer[pos-4+3] += y_offset
-                remaining_repeats -= 1
+                    fill_h += y_offset
             else:
-                buffer[pos] = x_offset
-                buffer[pos+1] = y_offset
-                buffer[pos+2] = rwidth
-                buffer[pos+3] = rheight
-                pos += 4
-                last_x0 = x02
-                last_y0 = y02
-                remaining_repeats = 63
+                if fill_x != -1:
+                    wgl_fill(color, fill_x, fill_y, fill_w, fill_h)
+                fill_x = rx0
+                fill_y = ry0
+                fill_w = rwidth
+                fill_h = rheight
 
             error_change:int = 0
             if error >= dy:
@@ -1010,9 +1013,8 @@ class WatchGraphics():
                 error_change += dx_x2
                 y0 += sy
             error += error_change
-        n_fills:int = pos>>2
-        if n_fills > 0:
-            display.wgl_fill_seq(color, start_x, start_y, buffer, n_fills)
+        if fill_x != -1:
+            wgl_fill(color, fill_x, fill_y, fill_w, fill_h)
 
 
     #@micropython.native
@@ -1093,13 +1095,6 @@ class DummyDisplay(DisplayProtocol):
         self.spec = DisplaySpec(width, height, color_format)
     def wgl_fill(self, color:int, x:int, y:int, width:int, height:int):
         print("FILL "+hex(color)+", X:"+str(x)+", Y:"+str(y)+", W:"+str(width)+", H:"+str(height))
-    def wgl_fill_seq(self, color:int, x:int, y:int, data:memoryview, n:int):
-        print("FILL SEQ "+hex(color)+":")
-        nx4:int = n<<2
-        for i in range(0, nx4, 4):
-            x += data[i+0]
-            y += data[i+1]
-            print("  X:"+str(x)+", Y:"+str(y)+", W:"+str(data[i+2])+", H:"+str(data[i+3]))
     def wgl_blit(self, image:ImageStream, x:int, y:int):
         print("BLIT IMAGE:    X:"+str(x)+", Y:"+str(y)+", W:"+str(image.width)+", H:"+str(image.height))
         print("  "+image.info())
@@ -1135,9 +1130,13 @@ if __name__ == '__main__':
 
     dis = DummyDisplay(240, 240)
     dg = WatchGraphics(dis)
+    print("Draw Line 1")
     dg.draw_line(0, 1,  0, 1,  0, 1)
+    print("Draw Line 2")
     dg.draw_line(0, 1,  0, 1,  6, 4)
+    print("Draw Line 3")
     dg.draw_line(0, 3,  -1, -1,  6, 4)
+    print("Done")
 
     img = DummyImageStream(240, 240)
     img2 = DummyImageStream(10, 10)
