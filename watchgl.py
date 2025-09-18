@@ -12,6 +12,15 @@ except ImportError:
     import micropython_faker as micropython
 
 try:
+    import gc
+    def _gc_collect():
+        gc.collect()
+except (ImportError, AttributeError):
+    def _gc_collect():
+        gc.collect()
+
+
+try:
     from typing import Protocol
 except ImportError:
     Protocol = object           # type: ignore[assignment]
@@ -755,7 +764,7 @@ _C_TO_RADIANS:float = (math.pi / 180)
 class WatchGraphics():
     _8BIT_UNSIGNED_INT = _array_get_int_type(8, unsigned=True)
 
-    def __init__(self, display:DisplayProtocol):
+    def __init__(self, display:DisplayProtocol, gc_collect:bool=True):
         self.display:DisplayProtocol = display
 
         self._legacy_font_stream:MonoImageStream = MonoImageStream(display.spec.color_format, memoryview(b'\x00'), 8, 1)
@@ -773,10 +782,16 @@ class WatchGraphics():
         self._window_x:int = 0
         self._window_y:int = 0
 
+        # Init Buffer for needed for drawing lines
         self._draw_line_buffer:memoryview = memoryview(array(self._8BIT_UNSIGNED_INT, _zero_generator(display.spec.min_dimension*4)))
 
+        # Init Crop Streamers used for Blitting images that dont fit in their components
         self._crop_v_stream:VerticalCropStream = VerticalCropStream(DummyImageStream(1, 1), 0, 1)
         self._crop_h_stream:HorizontalCropStream = HorizontalCropStream(DummyImageStream(1, 1), 0, 1)
+
+        # Call garbage collection to clean up potential temporary allocated objects
+        if gc_collect:
+            _gc_collect()
 
 
     def _set_window(self, x:int, y:int, width:int, height:int, shift_x:int, shift_y:int):
