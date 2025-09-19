@@ -8,9 +8,6 @@ import math
 # TODO: Implement a screen that can just be used, without lazy drawing, or components, needed for games and for draw565 Frontend
 # TODO: Rewrite draw565 to be a simple frontend to this library, as the size of the binary must be reduces, so the native and viper functions need to go
 # TODO: Implement Drawing and Switching of screens
-# TODO: Change components to make their sizes and positions to be aligned to 16 Pixels, this is enough precision for most applications and makes many things easier
-# TODO: When initializing a screen, check if the components overlap or go out of bounds both should not be allowed,
-#           This could be done using a bitfield, with one bit per possible component on the screen, on a 240x240 screen this is would only be 256 bits/32 bytes.
 # TODO: For smooth scrolling it would be required to get the components of a screen efficiently, that overlap with a stripe on the screen.
 
 
@@ -31,6 +28,20 @@ try:
 except (ImportError, AttributeError):
     def _gc_collect():
         gc.collect()
+
+
+TILE_SIZE = const(16)                       # Size of tiles on the screen, all components must be aligned to tiles
+_TILE_SIZE_DIV = const(4)                   # Number of bits to shift right by to divide by the Tile Size
+_TILE_SIZE_MOD_MASK = const(0xfffff0)       # Bitmask to get the modulo, x%TILE_SIZE => x&TILE_SIZE_MOD_MASK
+_TILE_SIZE_ALIGN_MASK = const(0xf)          # Bitmask to subtract the modulo, basically aligns it to the Tile Size
+
+
+_MAX_TILES_PER_DIM = const(16)
+
+# The Max size of the screen is dependent on the tile size, currently it is assumed that all screens have at most 16 Tiles in the width
+_MAX_SCREEN_WIDTH = const(TILE_SIZE*_MAX_TILES_PER_DIM)
+_MAX_SCREEN_HEIGHT = const(TILE_SIZE*_MAX_TILES_PER_DIM)
+
 
 
 try:
@@ -148,21 +159,34 @@ class Alignment():
 
 class DisplaySpec():
     _SUPPORTED_SCROLLS = set([Direction.UP, Direction.DOWN])
-    def __init__(self, width:int, height:int, color_format:int, scroll_directions:frozenset[int]=frozenset([Direction.UP, Direction.DOWN]), vscroll_stripe_size:int=16, hscroll_stripe_size:int=0):
+    def __init__(self, width:int, height:int, color_format:int, scroll_directions:frozenset[int]=frozenset([Direction.UP, Direction.DOWN]), vscroll_stripe_size:int=TILE_SIZE, hscroll_stripe_size:int=0):
         self.width:int = width
         self.height:int = height
         self.color_format:int = color_format
         self.max_dimension:int = width
         self.min_dimension:int = height
 
+        if height > width:
+            self.max_dimension = height
+            self.min_dimension = width
+
+
+        if width > _MAX_SCREEN_WIDTH:
+            raise Exception("The screen is too wide to handle, currently not more than "+str(_MAX_SCREEN_WIDTH)+" is allowed")
+        if height > _MAX_SCREEN_WIDTH:
+            raise Exception("The screen is too wide to handle, currently not more than "+str(_MAX_SCREEN_HEIGHT)+" is allowed")
+
+        self.tiled_height:int = height>>_TILE_SIZE_DIV
+        self.tiled_width:int = width>>_TILE_SIZE_DIV
+
+
         if vscroll_stripe_size < 0:
             raise Exception("vscroll_stripe_size must not be negative")
-        if vscroll_stripe_size < 16:
+        vscroll_stripe_size &= _TILE_SIZE_ALIGN_MASK
+        if vscroll_stripe_size <= 0:
             if Direction.UP in scroll_directions or Direction.DOWN in scroll_directions:
                 raise Exception("Vertical Scrolling area is too small to implement scrolling, must specify allowed scrolling directions to not include UP or DOWN")
             vscroll_stripe_size = 0
-        else:
-            vscroll_stripe_size = 16
 
         self.vscroll_stripe_size =  vscroll_stripe_size
 
@@ -179,9 +203,6 @@ class DisplaySpec():
 
         self.scroll_directions:frozenset[int] = scroll_directions
 
-        if height > width:
-            self.max_dimension = height
-            self.min_dimension = width
 
 class ImageStream(Protocol):
     width: int
@@ -661,21 +682,23 @@ def _draw_function_sample(com:'Component', wg:'WatchGraphics'):
 
 class Component():
     def __init__(self, x:int, y:int, width:int, height:int, draw_function):
+        if (x < 0 or x&_TILE_SIZE_MOD_MASK != 0 or
+          y < 0 or y&_TILE_SIZE_MOD_MASK != 0 or
+          width <= 0 or width&_TILE_SIZE_MOD_MASK != 0 or
+          height <= 0 or height&_TILE_SIZE_MOD_MASK != 0):
+            raise Exception("Invalid Sizing or Positioning of Component, Components Size and Position must be aligned to "+str(TILE_SIZE)+", Position must not be negative and Size must be greater than 0")
+
         self.x:int = x
         self.y:int = y
         self.width:int = width
         self.height:int = height
 
-        self.weight:int = self.width*self.height
 
         self.draw = draw_function
         self._state:dict[str, object] = {}
         self.dirty:bool = True
         self._screen:"Screen" = _DUMMY_SCREEN
         self._cid:int = 0
-    def register(self, screen:"Screen", cid:int):
-        self._screen = screen
-        self._cid = cid
     def init_vars(self, state:dict[str, object]):
         self._state = state
         if not self.dirty:
@@ -696,43 +719,86 @@ class Component():
         self._state[k] = v
 
 
+
 class Screen():
+    _8BIT_UNSIGNED_INT = _array_get_int_type(8, unsigned=True)
     _16BIT_UNSIGNED_INT = _array_get_int_type(16, unsigned=True)
+
+
+    _CREATION_OVERLAP_BITMASK:memoryview = memoryview(array(_16BIT_UNSIGNED_INT, bytearray(_MAX_TILES_PER_DIM*4)))
     def __init__(self, bgcolor:int, display_spec:DisplaySpec, components:list['Component']):
-        ncomponents:list['Component'] = []
         if len(components) > 127:
             raise Exception("Too many components")
-        cid:int = 1
         self.bgcolor:int = bgcolor
 
         self.display_spec:DisplaySpec = display_spec
 
-        self.bounds_x0:int = -1
-        self.bounds_y0:int = -1
-        self.bounds_x1:int = -1
-        self.bounds_y1:int = -1
-        if len(components) > 0:
-            self.bounds_x0 = components[0].x
-            self.bounds_y0 = components[0].y
-            self.bounds_x1 = self.bounds_x0+components[0].width-1
-            self.bounds_y1 = self.bounds_y0+components[0].height-1
+
+        tiled_height:int = display_spec.width>>_TILE_SIZE_DIV
+        tiled_width:int = display_spec.height>>_TILE_SIZE_DIV
+        self.tiled_height = tiled_height
+
+        assert(tiled_height <= _MAX_TILES_PER_DIM and tiled_width <= _MAX_TILES_PER_DIM)
+
+        com_map_y:list[list[int]] = []
+
+        # The bitfield is used to detect overlaps in components
+        # Each array index is a row and each bit says wether that column is occupied by a component
+        bitfield:memoryview = self._CREATION_OVERLAP_BITMASK
+        for i in range(tiled_height):
+            bitfield[i] = 0
+            com_map_y.append([])
 
 
+        ncomponents:list['Component'] = []
+        cid:int = 1
         for c in components:
-            if c.x < self.bounds_x0:
-                self.bounds_x0 = c.x
-            if c.y < self.bounds_y0:
-                self.bounds_y0 = c.y
-            cx1 = c.x+c.width-1
-            cy1 = c.y+c.height-1
-            if cx1 > self.bounds_x1:
-                self.bounds_x1 = cx1
-            if cy1 > self.bounds_y1:
-                self.bounds_y1 = cy1
-            
-            c.register(self, cid)
+            # Get y range occupied by tile
+            cy0:int = (c.y)>>_TILE_SIZE_DIV
+            cy1:int = cy0+(c.height>>_TILE_SIZE_DIV)
+
+            # Get x range occupied by tile
+            cx0:int = (c.x)>>_TILE_SIZE_DIV
+            cx1:int = cx0+(c.width>>_TILE_SIZE_DIV)
+
+            if cy1 > tiled_height or cx1 > tiled_width:
+                raise Exception("Component goes out of screen bounds")
+
+            # Check and set flags in bitfield wether a given position is already occupied by another component
+            for cyp in range(cy0, cy1):
+                com_map_y[cyp].append(cid)
+                value = bitfield[cyp]
+                for i in range(cx0, cx1):
+                    if (value>>i)&1:
+                        raise Exception("Overlapping components detected")
+                    bitfield[cyp] |= 1<<i
+
+            # Register this screen to the component so that it nows its id and has a reference to the screen
+            c._screen = self
+            c._cid = cid
+
             ncomponents.append(c)
             cid = cid+1
+
+
+        map_empty_row:memoryview = memoryview(array(self._8BIT_UNSIGNED_INT, [0]))
+        last_used_memoryview:memoryview = map_empty_row
+        last_used_list:list[int] = [0]
+
+        com_map_y2:list[memoryview] = []
+        for r in com_map_y:
+            r.append(0)
+            if len(r) == 1:
+                com_map_y2.append(map_empty_row)
+            elif r == last_used_list:
+                com_map_y2.append(last_used_memoryview)
+            else:
+                last_used_list = r
+                last_used_memoryview = memoryview(array(self._8BIT_UNSIGNED_INT, r))
+                com_map_y2.append(last_used_memoryview)
+        self.com_map_y:list[memoryview] = com_map_y2
+
+
         self.components:list['Component'] = ncomponents
         self.update_array = memoryview(array(self._16BIT_UNSIGNED_INT, bytearray(9*2)))
     @micropython.viper
@@ -825,7 +891,7 @@ _WGWI_YSHIFT = const(4)
 
 _C_TO_RADIANS:float = (math.pi / 180)
 class WatchGraphics():
-    _8BIT_UNSIGNED_INT = _array_get_int_type(8, unsigned=True)
+    _BIT_UNSIGNED_INT = _array_get_int_type(8, unsigned=True)
     _32BIT_SIGNED_INT = _array_get_int_type(32, unsigned=False)
 
     def __init__(self, display:DisplayProtocol, gc_collect:bool=True):
@@ -879,44 +945,44 @@ class WatchGraphics():
         window_info:ptr32 = ptr32(self._window_info)
 
         y += window_info[_WGWI_YSHIFT]
-        width:int = window_info[_WGWI_WIDTH]
-        height:int = window_info[_WGWI_HEIGHT]
+        window_width:int = window_info[_WGWI_WIDTH]
+        window_height:int = window_info[_WGWI_HEIGHT]
 
-        image_width:int = int(image.width)
-        image_height:int = int(image.height)
+        width:int = int(image.width)
+        height:int = int(image.height)
         skip_lines:int = 0
         if y < 0:
             skip_lines -= y
         reduce_by_lines:int = skip_lines
-        if y+image_height > height:
-            reduce_by_lines += (y+image_height)-height
+        if y+height > window_height:
+            reduce_by_lines += (y+height)-window_height
 
         skip_cols:int = 0
         if x < 0:
             skip_cols -= x
         reduce_by_cols:int = skip_cols
-        if x+image_width > width:
-            reduce_by_cols += (x+image_width)-width
+        if x+width > window_width:
+            reduce_by_cols += (x+width)-window_width
 
         if reduce_by_lines == 0 and reduce_by_cols == 0:
             self.display.wgl_blit(image, x, y)
             return
 
         if reduce_by_lines > 0:
-            new_height:int = image_height-reduce_by_lines
-            if new_height <= 0:
+            height -= reduce_by_lines
+            if height <= 0:
                 return
             croppedy:VerticalCropStream = self._crop_v_stream
-            croppedy._setup(image, skip_lines, new_height)
+            croppedy._setup(image, skip_lines, height)
             image = croppedy
             y += skip_lines
 
         if reduce_by_cols > 0:
-            new_width:int = image_width-reduce_by_cols
-            if new_width <= 0:
+            width -= reduce_by_cols
+            if width <= 0:
                 return
             croppedx:HorizontalCropStream = self._crop_h_stream
-            croppedx._setup(image, skip_cols, new_width)
+            croppedx._setup(image, skip_cols, width)
             image = croppedx
             x += skip_cols
 
@@ -991,7 +1057,7 @@ class WatchGraphics():
 
         window_info:ptr32 = ptr32(self._window_info)
 
-        # Shift content by y
+        # Shift content by y, do not shift before, else it would be shifted twice, when using simple fill operations
         yshift:int = window_info[_WGWI_YSHIFT]
         y0 += yshift
         y1 += yshift
@@ -1168,10 +1234,10 @@ class WatchGraphics():
 
 
 
-_DUMMY_SCREEN:Screen = Screen(0, DisplaySpec(0, 0, ColorFormat.RGB565), [])
+_DUMMY_SCREEN:Screen = Screen(0, DisplaySpec(0, 0, ColorFormat.RGB565, scroll_directions=frozenset([])), [])
 class DummyDisplay(DisplayProtocol):
     def __init__(self, width:int, height:int, color_format:int=ColorFormat.RGB565):
-        self.spec = DisplaySpec(width, height, color_format)
+        self.spec = DisplaySpec(width, height, color_format, scroll_directions=frozenset([]))
     def wgl_vscroll(self, pixels:int):
         pass
     def wgl_fill(self, color:int, x:int, y:int, width:int, height:int):
