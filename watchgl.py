@@ -1,7 +1,20 @@
 #!/usr/bin/env python3
 from array import array
 import math
-import builtins
+
+
+# TODO: Fix Default font of WatchGraphics
+# TODO; Check drawing functions if they use correct yshift, and apply window coordinates correctly
+# TODO: Implement a screen that can just be used, without lazy drawing, or components, needed for games and for draw565 Frontend
+# TODO: Rewrite draw565 to be a simple frontend to this library, as the size of the binary must be reduces, so the native and viper functions need to go
+# TODO: Implement Drawing and Switching of screens
+# TODO: Change components to make their sizes and positions to be aligned to 16 Pixels, this is enough precision for most applications and makes many things easier
+# TODO: When initializing a screen, check if the components overlap or go out of bounds both should not be allowed,
+#           This could be done using a bitfield, with one bit per possible component on the screen, on a 240x240 screen this is would only be 256 bits/32 bytes.
+# TODO: For smooth scrolling it would be required to get the components of a screen efficiently, that overlap with a stripe on the screen.
+
+
+
 
 try:
     from micropython import const       # type: ignore[import-not-found]
@@ -120,10 +133,10 @@ class GraphicsState():
 
 # Enum
 class Direction():
-    Up = 0
-    Down = 1
-    Left = 2
-    Right = 3
+    UP = 0
+    DOWN = 1
+    LEFT = 2
+    RIGHT = 3
 
 # Enum
 class Alignment():
@@ -134,12 +147,38 @@ class Alignment():
 
 
 class DisplaySpec():
-    def __init__(self, width:int, height:int, color_format:int):
+    _SUPPORTED_SCROLLS = set([Direction.UP, Direction.DOWN])
+    def __init__(self, width:int, height:int, color_format:int, scroll_directions:frozenset[int]=frozenset([Direction.UP, Direction.DOWN]), vscroll_stripe_size:int=16, hscroll_stripe_size:int=0):
         self.width:int = width
         self.height:int = height
         self.color_format:int = color_format
         self.max_dimension:int = width
         self.min_dimension:int = height
+
+        if vscroll_stripe_size < 0:
+            raise Exception("vscroll_stripe_size must not be negative")
+        if vscroll_stripe_size < 16:
+            if Direction.UP in scroll_directions or Direction.DOWN in scroll_directions:
+                raise Exception("Vertical Scrolling area is too small to implement scrolling, must specify allowed scrolling directions to not include UP or DOWN")
+            vscroll_stripe_size = 0
+        else:
+            vscroll_stripe_size = 16
+
+        self.vscroll_stripe_size =  vscroll_stripe_size
+
+        scroll_directions = frozenset(scroll_directions)
+        for scd in scroll_directions:
+            if scd == Direction.UP:
+                continue
+            if scd == Direction.DOWN:
+                continue
+            raise Exception("Unsupported Scroll Direction used")
+
+        if hscroll_stripe_size != 0:
+            raise Exception("Horizontal Scrolling is not supported, so hscroll_stripe_size must be zero")
+
+        self.scroll_directions:frozenset[int] = scroll_directions
+
         if height > width:
             self.max_dimension = height
             self.min_dimension = width
@@ -154,8 +193,14 @@ class ImageStream(Protocol):
     def skip_pixels(self, n:int):
         pass
     # Read n Pixels, into the buffer at the given offset, returns number of pixels read. Offset is in pixels
+    # The streams signals that it is emptry by returning a number smaller than the number of requested pixels
+    # The stream is never allowed to return less pixels than requested, while the stream has not reached its end
+
+    # A Reader can expect that a stream does not have too many pixels, or that the number of remaining pixels changes unless by the amount specified in skip_pixels or when reading_pixels
+
     def read_pixels(self, buf:memoryview, n:int, offset:int) -> int:
         return -1
+    # Get Remaining number of pixels, should only be used in a few cases, like ensuring the stream has enough pixels before starting to read it, as it can be slow.
     def get_remaining(self) -> int:
         return -1
     def info(self) -> str:
@@ -167,11 +212,16 @@ class ImageStream(Protocol):
 class DisplayProtocol(Protocol):
     spec: DisplaySpec
 
+    def wgl_vscroll(self, pixels:int):
+        pass
+
     def wgl_fill(self, color:int, x:int, y:int, width:int, height:int):
         pass
     # Removed as it is probably not necessary, and that the buffers needed to use would cause more problems
     #def wgl_fill_seq(self, color:int, x:int, y:int, data:memoryview, n:int):
     #    pass
+
+    # The Function
     def wgl_blit(self, image:ImageStream, x:int, y:int):
         pass
 
@@ -193,7 +243,7 @@ _SX_REMAINING = const(2)
 class VerticalCropStream():
     _32BIT_SIGNED_INT = _array_get_int_type(32, unsigned=False)
     def __init__(self, instream:ImageStream, skip:int, height:int):
-        self._extra_state:memoryview = memoryview(array(self._32BIT_SIGNED_INT, _zero_generator(3)))
+        self._extra_state:memoryview = memoryview(array(self._32BIT_SIGNED_INT, bytearray(3*4)))
         self._setup(instream, skip, height)
     def _setup(self, instream:ImageStream, skip:int, height:int):
         self.width:int = instream.width
@@ -254,7 +304,7 @@ _HCS_REM_IN_L = const(4)
 class HorizontalCropStream():
     _32BIT_SIGNED_INT = _array_get_int_type(32, unsigned=False)
     def __init__(self, instream:ImageStream, skip:int, width:int):
-        self._extra_state:memoryview = memoryview(array(self._32BIT_SIGNED_INT, _zero_generator(5)))
+        self._extra_state:memoryview = memoryview(array(self._32BIT_SIGNED_INT, bytearray(5*4)))
         self._setup(instream, skip, width)
     def _setup(self, instream:ImageStream, skip:int, width:int):
         self.height:int = instream.height
@@ -438,7 +488,7 @@ class MonoImageStream():
     def __init__(self, screen_color_format:int, raw_data:memoryview, width:int, height:int):
         self._color_format:int = screen_color_format
         self._palette:memoryview = memoryview(array(self._16BIT_UNSIGNED_INT, _PALETTE2_INITALIZER))
-        self._extra_state:memoryview = memoryview(array(self._32BIT_SIGNED_INT, _zero_generator(7)))
+        self._extra_state:memoryview = memoryview(array(self._32BIT_SIGNED_INT, bytearray(7*4)))
         self._setup(raw_data, width, height)
     def _setup(self, raw_data:memoryview, width:int, height:int):
         if width <= 0 or height <= 0:
@@ -647,6 +697,7 @@ class Component():
 
 
 class Screen():
+    _16BIT_UNSIGNED_INT = _array_get_int_type(16, unsigned=True)
     def __init__(self, bgcolor:int, display_spec:DisplaySpec, components:list['Component']):
         ncomponents:list['Component'] = []
         if len(components) > 127:
@@ -683,40 +734,44 @@ class Screen():
             ncomponents.append(c)
             cid = cid+1
         self.components:list['Component'] = ncomponents
-        self.update_array = memoryview(bytearray(16))
-        for i in range(0,16):
-            self.update_array[i] = 0
-        self.update_bitfield:int = 0
+        self.update_array = memoryview(array(self._16BIT_UNSIGNED_INT, bytearray(9*2)))
     @micropython.viper
     def notify_component_update(self, cid:int):
-        py_int = builtins.int
-        byti:int = cid>>3
-        biti:int = cid&0x7
-        update_pattern:int = 1<<biti
-        byti2:int = int(self.update_array[byti]) | update_pattern
-        biti2:int = int(self.update_bitfield) | 1<<byti
-        # TODO: Use pointers to set value
-        self.update_array[byti] = py_int(byti2)
-        self.update_bitfield = py_int(biti2)
-    #@micropython.viper
+        update_array:ptr16 = ptr16(self.update_array)
+
+        byti:int = 1+(cid>>4)
+        biti:int = cid&0xf
+
+        update_array[0] |= 1<<byti
+        update_array[byti] |= 1<<biti
+    @micropython.viper
     def draw(self, display):
-        py_int = builtins.int
+        update_array:ptr16 = ptr16(self.update_array)
         # Use Pointers to set value
-        update_bitfield:int = int(self.update_bitfield)
+        update_bitfield:int = update_array[0]
         if update_bitfield == 0:
             return
-        id_block_off:int = -8
-        for byti in range(0,16):
-            id_block_off += 8
+        update_bitfield >>= 1
+        id_block_off:int = -16
+        byti:int = 0
+        while byti < (8+1):
+            id_block_off += 16
             id_block_used:int = update_bitfield&1
+            byti += 1
             update_bitfield >>= 1
+
             if not id_block_used:
                 if update_bitfield == 0:
                     break
                 continue
 
-            value:int = int(self.update_array[byti])&0xFF
-            for id_sub in range(0,8):
+            value:int = update_array[byti]&0xFFFF
+            update_array[byti] = 0
+
+            id_sub:int = 0
+            while id_sub < 16:
+                id_sub += 1
+
                 id_used = value&1
                 value >>= 1
                 if not id_used:
@@ -725,9 +780,9 @@ class Screen():
                     continue
                 cid = id_block_off+id_sub
                 com = self.components[cid]
-                com.draw(com, display)
-            self.update_array[byti] = py_int(0)
-        self.update_bitfield = py_int(0)
+                com_draw = com.draw
+                com_draw(com, display)
+        update_array[0] = 0
 
 
 
@@ -761,9 +816,17 @@ class _LegacyFontWrapper():
 
 
 
+
+_WGWI_WIDTH = const(0)
+_WGWI_HEIGHT = const(1)
+_WGWI_XPOS = const(2)
+_WGWI_YPOS = const(3)
+_WGWI_YSHIFT = const(4)
+
 _C_TO_RADIANS:float = (math.pi / 180)
 class WatchGraphics():
     _8BIT_UNSIGNED_INT = _array_get_int_type(8, unsigned=True)
+    _32BIT_SIGNED_INT = _array_get_int_type(32, unsigned=False)
 
     def __init__(self, display:DisplayProtocol, gc_collect:bool=True):
         self.display:DisplayProtocol = display
@@ -774,14 +837,21 @@ class WatchGraphics():
 
         self.bgcolor = 0
         self.graphics_state:int = GraphicsState.Initial
-        self.scroll_direction:int = Direction.Up
-        self.scroll_stripe_size:int = 20            #FIX # TODO Select better source of value
-        self.scroll_y_shift:int = 0
+        self.scroll_direction:int = Direction.UP
+        self.vscroll_stripe_size:int = display.spec.vscroll_stripe_size
 
         self.width:int = self.display.spec.width
         self.height:int = self.display.spec.height
-        self._window_x:int = 0
-        self._window_y:int = 0
+
+        self._window_info:memoryview = memoryview(array(self._32BIT_SIGNED_INT, bytearray(5*4)))
+
+        # Setup window info
+        self._window_info[_WGWI_WIDTH] = self.width
+        self._window_info[_WGWI_HEIGHT] = self.height
+        self._window_info[_WGWI_XPOS] = 0
+        self._window_info[_WGWI_YPOS] = 0
+        self._window_info[_WGWI_YSHIFT] = 0
+
 
         # Init Crop Streamers used for Blitting images that dont fit in their components
         self._crop_v_stream:VerticalCropStream = VerticalCropStream(DummyImageStream(1, 1), 0, 1)
@@ -792,21 +862,26 @@ class WatchGraphics():
             _gc_collect()
 
 
-    def _set_window(self, x:int, y:int, width:int, height:int, shift_x:int, shift_y:int):
-        if shift_x != 0:
-            raise Exception("Shifting contents by x is currently not supported")
-        self._window_x = x
-        self._window_y = y
+    def _set_window(self, x:int, y:int, width:int, height:int, shift_y:int):
         self.width = width
         self.height = height
-        self.scroll_y_shift = shift_y
+
+        # Setup window info
+        self._window_info[_WGWI_WIDTH] = self.width
+        self._window_info[_WGWI_HEIGHT] = self.height
+        self._window_info[_WGWI_XPOS] = x
+        self._window_info[_WGWI_YPOS] = y
+        self._window_info[_WGWI_YSHIFT] = shift_y
 
 
-    #@micropython.viper
+    @micropython.viper
     def blit(self, image, x:int, y:int):
-        y += int(self.scroll_y_shift)
-        width:int = int(self.width)
-        height:int = int(self.height)
+        window_info:ptr32 = ptr32(self._window_info)
+
+        y += window_info[_WGWI_YSHIFT]
+        width:int = window_info[_WGWI_WIDTH]
+        height:int = window_info[_WGWI_HEIGHT]
+
         image_width:int = int(image.width)
         image_height:int = int(image.height)
         skip_lines:int = 0
@@ -845,14 +920,16 @@ class WatchGraphics():
             image = croppedx
             x += skip_cols
 
-        self.display.wgl_blit(image, x, y)
+        self.display.wgl_blit(image, window_info[_WGWI_XPOS]+x, window_info[_WGWI_YPOS]+y)
         image.reset()
 
-    #@micropython.viper
+    @micropython.viper
     def fill(self, color:int, x:int, y:int, width:int, height:int):
-        y += int(self.scroll_y_shift)
-        sheight:int = int(self.height)
-        swidth:int = int(self.width)
+        window_info:ptr32 = ptr32(self._window_info)
+
+        y += window_info[_WGWI_YSHIFT]
+        window_height:int = window_info[_WGWI_HEIGHT]
+        window_width:int = window_info[_WGWI_WIDTH]
         if y < 0:
             height += y
             y = 0
@@ -861,13 +938,13 @@ class WatchGraphics():
             x = 0
         max_y:int = y+height-1
         max_x:int = x+width-1
-        if max_x >= swidth:
-            width += (swidth-1)-max_x
-        if max_y >= sheight:
-            height += (sheight-1)-max_y
+        if max_x >= window_width:
+            width += (window_width-1)-max_x
+        if max_y >= window_height:
+            height += (window_height-1)-max_y
         if width <= 0 or height <= 0:
             return
-        self.display.wgl_fill(color, int(self._window_x)+x, int(self._window_y)+y, width, height)
+        self.display.wgl_fill(color, window_info[_WGWI_XPOS]+x, window_info[_WGWI_YPOS]+y, width, height)
 
 
     # Draw a line, with a given thickness and color, between the start and endpoints,
@@ -912,12 +989,10 @@ class WatchGraphics():
             return
 
 
-        xshift:int = int(self._window_x)
-        x0 += xshift
-        x1 += xshift
+        window_info:ptr32 = ptr32(self._window_info)
 
         # Shift content by y
-        yshift:int = int(self.scroll_y_shift)+int(self._window_y)
+        yshift:int = window_info[_WGWI_YSHIFT]
         y0 += yshift
         y1 += yshift
 
@@ -938,10 +1013,14 @@ class WatchGraphics():
         fill_h:int = -1
 
         error:int = dx_x2+dy_x2
-        window_width:int = int(self.width)
-        window_height:int = int(self.height)
+        window_width:int = window_info[_WGWI_WIDTH]
+        window_height:int = window_info[_WGWI_HEIGHT]
 
         wgl_fill = self.display.wgl_fill
+
+
+        wxpos:int = window_info[_WGWI_XPOS]
+        wypos:int = window_info[_WGWI_YPOS]
 
         while True:
             # Cropping the current point so it doesnt overdraw
@@ -973,7 +1052,7 @@ class WatchGraphics():
 
             if rwidth <= 0 or rheight <= 0:
                 if fill_x != -1:
-                    wgl_fill(color, fill_x, fill_y, fill_w, fill_h)
+                    wgl_fill(color, wxpos+fill_x, wypos+fill_y, fill_w, fill_h)
                     fill_x = -1
                     fill_y = -1
             elif y_offset == 0 and x_offset == 0:
@@ -995,7 +1074,7 @@ class WatchGraphics():
                     fill_h += y_offset
             else:
                 if fill_x != -1:
-                    wgl_fill(color, fill_x, fill_y, fill_w, fill_h)
+                    wgl_fill(color, wxpos+fill_x, wypos+fill_y, fill_w, fill_h)
                 fill_x = rx0
                 fill_y = ry0
                 fill_w = rwidth
@@ -1014,10 +1093,10 @@ class WatchGraphics():
                 y0 += sy
             error += error_change
         if fill_x != -1:
-            wgl_fill(color, fill_x, fill_y, fill_w, fill_h)
+            wgl_fill(color, wxpos+fill_x, wypos+fill_y, fill_w, fill_h)
 
 
-    #@micropython.native
+    @micropython.native
     def draw_line_polar(self, color:int, x:int, y:int, theta:int, r0:int, r1:int, width:int):
         theta2:float = theta*_C_TO_RADIANS
         xdelta:float = math.sin(theta2)
@@ -1030,7 +1109,7 @@ class WatchGraphics():
 
 
     # Returns a tuple of integers
-    #@micropython.native
+    @micropython.native
     def string_bounding_box(self, s:str) -> tuple[int, int]:
         font:_LegacyFontWrapper = self._font
         height:int = font.height
@@ -1046,7 +1125,7 @@ class WatchGraphics():
 
 
 
-    #@micropython.native
+    @micropython.native
     def draw_string(self, color:int, s:str, x:int, y:int):
         window_width:int = self.width
         window_height:int = self.height
@@ -1093,6 +1172,8 @@ _DUMMY_SCREEN:Screen = Screen(0, DisplaySpec(0, 0, ColorFormat.RGB565), [])
 class DummyDisplay(DisplayProtocol):
     def __init__(self, width:int, height:int, color_format:int=ColorFormat.RGB565):
         self.spec = DisplaySpec(width, height, color_format)
+    def wgl_vscroll(self, pixels:int):
+        pass
     def wgl_fill(self, color:int, x:int, y:int, width:int, height:int):
         print("FILL "+hex(color)+", X:"+str(x)+", Y:"+str(y)+", W:"+str(width)+", H:"+str(height))
     def wgl_blit(self, image:ImageStream, x:int, y:int):
@@ -1127,7 +1208,6 @@ class DummyImageStream():
 
 
 if __name__ == '__main__':
-
     dis = DummyDisplay(240, 240)
     dg = WatchGraphics(dis)
     print("Draw Line 1")
