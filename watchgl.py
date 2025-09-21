@@ -45,6 +45,7 @@ _TILE_SIZE_MOD_MASK = const(0xfffff0)       # Bitmask to get the modulo, x%TILE_
 
 _TILES_PER_VSCROLL_STRIPE = const(2)
 _VSCROLL_STRIPE_SIZE = const(TILE_SIZE*_TILES_PER_VSCROLL_STRIPE)
+_VSCROLL_STRIPE_SIZE2 = const(_VSCROLL_STRIPE_SIZE*2)
 
 
 _MAX_TILES_PER_DIM = const(16)
@@ -157,7 +158,7 @@ class ImageStream(Protocol):
 
 class DisplaySpec():
     _SUPPORTED_SCROLLS = set([DIRECTION_UP, DIRECTION_DOWN])
-    def __init__(self, width:int, height:int, color_format:int, scroll_directions:frozenset[int]=frozenset([DIRECTION_UP, DIRECTION_DOWN]), vscroll_stripe_size:int=TILE_SIZE, hscroll_stripe_size:int=0):
+    def __init__(self, width:int, height:int, color_format:int, scroll_directions:frozenset[int]=frozenset([DIRECTION_UP, DIRECTION_DOWN]), vscroll_stripe_size:int=_VSCROLL_STRIPE_SIZE2, hscroll_stripe_size:int=0):
         self.width:int = width
         self.height:int = height
         self.color_format:int = color_format
@@ -180,7 +181,7 @@ class DisplaySpec():
 
         if vscroll_stripe_size < 0:
             raise Exception("vscroll_stripe_size must not be negative")
-        if vscroll_stripe_size < _VSCROLL_STRIPE_SIZE:
+        if vscroll_stripe_size < _VSCROLL_STRIPE_SIZE2:
             if DIRECTION_UP in scroll_directions or DIRECTION_DOWN in scroll_directions:
                 raise Exception("Vertical Scrolling area is too small to implement scrolling, must specify allowed scrolling directions to not include UP or DOWN")
 
@@ -297,7 +298,7 @@ class HorizontalCropStream():
         self.height:int = instream.height
         if skip < 0:
             raise Exception("Number of skipped columns must not be negative")
-        if skip.width > instream.width:
+        if skip+width > instream.width:
             raise Exception("Cropped width greater than source width")
         self.width:int = width
         self._instream:ImageStream = instream
@@ -733,7 +734,7 @@ class Screen():
     @micropython.viper
     def draw_lazy(self, wg):
         update_array:ptr16 = ptr16(self.update_array)
-        set_com_context = self._set_component_context
+        set_com_context = wg._set_component_context
         builtin_false = builtins.bool(False)
 
         # Use Pointers to set value
@@ -769,7 +770,7 @@ class Screen():
                     continue
                 cid = id_block_off+id_sub
                 com = self.components[cid]
-                set_component_context(com.x, com.y, com.width, com.height, 0)
+                set_com_context(com.x, com.y, com.width, com.height, 0)
                 com_draw = com.draw
                 com_draw(com, wg)
                 com.dirty = builtin_false
@@ -779,14 +780,14 @@ class Screen():
     @micropython.viper
     def draw_full(self, wg):
         update_array:ptr16 = ptr16(self.update_array)
-        set_com_context = self._set_component_context
+        set_com_context = wg._set_component_context
 
         n2:int = 0
         while n2 < 9:
             update_array[n2] = 0
         builtin_false = builtins.bool(False)
         for com in self.components:
-            set_component_context(com.x, com.y, com.width, com.height, 0)
+            set_com_context(com.x, com.y, com.width, com.height, 0)
             com_draw = com.draw
             com_draw(com, wg)
             com.dirty = builtin_false
@@ -796,10 +797,8 @@ class Screen():
         if scroll_direction != DIRECTION_UP and scroll_direction != DIRECTION_DOWN:
             raise Exception("Invalid Direction given")
         window_info:ptr32 = ptr32(self._screen_info)
-        vstripe:int = window_info[_SC_VSTRIPE]
         height:int = window_info[_SC_HEIGHT]
         tiled_height:int = window_info[_SC_THEIGHT]
-        fo
 
 
 
@@ -862,7 +861,6 @@ class WatchGraphics():
         self._text_bgcolor:int = _DEFAULT_BGCOLOR
         self._text_bgcolor_modified:bool = True
 
-        self.graphics_state:int = GraphicsState.Initial
         self.scroll_direction:int = DIRECTION_UP
 
         self.width:int = self.display.spec.width
@@ -1202,7 +1200,7 @@ class WatchGraphics():
                 break
             self.blit(cpx, x, y)
 
-    def draw_string_a(self, color:int, s:str, x:int, y:int, align:Alignment):
+    def draw_string_a(self, color:int, s:str, x:int, y:int, align:int):
         (rw, rh) = self.string_bounding_box(s)
         rwidth:int = int(rw)
         if align == ALIGNMENT_CENTER:
