@@ -475,8 +475,8 @@ class StripedStream():
 
 
 
-
-_PALETTE2_INITALIZER = [0, 0xFFFF]
+_DEFAULT_TEXT_FGCOLOR:int = const(0xFFFF)
+_PALETTE2_INITALIZER = [0, _DEFAULT_TEXT_FGCOLOR]
 
 
 _MIS_CBYTE = const(3)
@@ -840,7 +840,14 @@ class Screen():
 
 
 class _LegacyFontWrapper():
-    def __init__(self, font_data, bitblit:MonoImageStream):
+    def __init__(self, font_data, color_format:int):
+        (px, h, w) = font_data.get_ch('T')
+        self._bitblit:MonoImageStream = MonoImageStream(color_format, px, h, w)
+        self._setup(font_data)
+    def _setup(self, font_data):
+        self._fgcolor:int = _DEFAULT_TEXT_FGCOLOR
+        self._bitblit.set_color(0, _DEFAULT_TEXT_FGCOLOR)
+
         self.height:int = int(font_data.height())
         self.max_width:int = int(font_data.max_width())
         self.baseline:int = int(font_data.baseline())
@@ -850,11 +857,12 @@ class _LegacyFontWrapper():
         self.min_ch:int = int(font_data.min_ch())
         self.max_ch:int = int(font_data.max_ch())
         self._raw_data = font_data
-        self._bitblit:MonoImageStream = bitblit
     def set_bgcolor(self, color:int):
         self._bitblit.set_color(0, color)
     def set_fgcolor(self, color:int):
-        self._bitblit.set_color(1, color)
+        if self._fgcolor != color:
+            self._bitblit.set_color(1, color)
+            self._fgcolor = color
     def get_ch(self, ch:str) -> MonoImageStream:
         (px, h, w) = self._raw_data.get_ch(ch)
         bitblit:MonoImageStream = self._bitblit
@@ -871,6 +879,8 @@ _WGWI_XPOS = const(2)
 _WGWI_YPOS = const(3)
 _WGWI_YSHIFT = const(4)
 
+_DEFAULT_BGCOLOR = const(0)
+
 _C_TO_RADIANS:float = (math.pi / 180)
 class WatchGraphics():
     _BIT_UNSIGNED_INT = _array_get_int_type(8, unsigned=True)
@@ -879,10 +889,12 @@ class WatchGraphics():
     def __init__(self, display:DisplayProtocol, gc_collect:bool=True):
         self.display:DisplayProtocol = display
 
-        self._legacy_font_stream:MonoImageStream = MonoImageStream(display.spec.color_format, memoryview(b'\x00'), 8, 1)
-        self._font:_LegacyFontWrapper = _LegacyFontWrapper(fallback_font, self._legacy_font_stream)
+        self._font:_LegacyFontWrapper = _LegacyFontWrapper(fallback_font, display.spec.color_format)
 
-        self.bgcolor = 0
+        self.bgcolor:int = _DEFAULT_BGCOLOR
+        self._text_bgcolor:int = _DEFAULT_BGCOLOR
+        self._text_bgcolor_modified:bool = True
+
         self.graphics_state:int = GraphicsState.Initial
         self.scroll_direction:int = Direction.UP
         self.vscroll_stripe_size:int = display.spec.vscroll_stripe_size
@@ -908,10 +920,22 @@ class WatchGraphics():
         if gc_collect:
             _gc_collect()
 
+    def _set_bgcolor(self, bgcolor:int):
+        self.bgcolor = bgcolor
+        tbgcolor:int = self._text_bgcolor
+        if tbgcolor != bgcolor or self._text_bgcolor_modified:
+            self._text_bgcolor = bgcolor
+            self._text_bgcolor_modified = False
+            self._font.set_bgcolor(bgcolor)
 
     def _set_window(self, x:int, y:int, width:int, height:int, shift_y:int):
         self.width = width
         self.height = height
+        if self._text_bgcolor_modified:
+            tbgcolor:int = self.bgcolor
+            self._text_bgcolor = tbgcolor
+            self._text_bgcolor_modified = False
+            self._font.set_bgcolor(tbgcolor)
 
         # Setup window info
         self._window_info[_WGWI_WIDTH] = self.width
@@ -920,6 +944,12 @@ class WatchGraphics():
         self._window_info[_WGWI_YPOS] = y
         self._window_info[_WGWI_YSHIFT] = shift_y
 
+    def set_text_bgcolor(self, bgcolor:int):
+        old_tbgcolor:int = self._text_bgcolor
+        if old_tbgcolor != bgcolor:
+            self._text_bgcolor = bgcolor
+            self._text_bgcolor_modified = True
+            self._font.set_bgcolor(bgcolor)
 
     @micropython.viper
     def blit(self, image, x:int, y:int):
