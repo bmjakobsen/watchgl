@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 from array import array
 import math
+import fallback_font
 
 
-# TODO: Fix Default font of WatchGraphics
+
 # TODO; Check drawing functions if they use correct yshift, and apply window coordinates correctly
 # TODO: Implement a screen that can just be used, without lazy drawing, or components, needed for games and for draw565 Frontend
 # TODO: Rewrite draw565 to be a simple frontend to this library, as the size of the binary must be reduces, so the native and viper functions need to go
@@ -20,6 +21,10 @@ except ImportError:
     print("Using Micropython Faker Library")
     from micropython_faker import const
     import micropython_faker as micropython
+    ptr8 = memoryview
+    ptr16 = memoryview
+    ptr32 = memoryview
+
 
 try:
     import gc
@@ -48,27 +53,6 @@ try:
     from typing import Protocol
 except ImportError:
     Protocol = object           # type: ignore[assignment]
-
-try:
-    ptr8(b'\x00')               # type: ignore[used-before-def]
-except NameError:
-    ptr8 = memoryview
-except Exception:
-    pass
-
-try:
-    ptr16(b'\x00')              # type: ignore[used-before-def]
-except NameError:
-    ptr16 = memoryview
-except Exception:
-    pass
-
-try:
-    ptr32(b'\x00')              # type: ignore[used-before-def]
-except NameError:
-    ptr32 = memoryview
-except Exception:
-    pass
 
 
 
@@ -125,8 +109,6 @@ def _array_get_int_type(n:int, unsigned:bool=False) -> str:
 
 
 
-
-BGCOLOR_TRANSPARENT = -1
 
 
 # Enum
@@ -898,8 +880,7 @@ class WatchGraphics():
         self.display:DisplayProtocol = display
 
         self._legacy_font_stream:MonoImageStream = MonoImageStream(display.spec.color_format, memoryview(b'\x00'), 8, 1)
-        #self._font:_LegacyFontWrapper = _LegacyFontWrapper(default_font, )
-        # TODO FIX DEFAULT FONT
+        self._font:_LegacyFontWrapper = _LegacyFontWrapper(fallback_font, self._legacy_font_stream)
 
         self.bgcolor = 0
         self.graphics_state:int = GraphicsState.Initial
