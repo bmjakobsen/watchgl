@@ -42,7 +42,9 @@ except (ImportError, AttributeError):
 TILE_SIZE = const(16)                       # Size of tiles on the screen, all components must be aligned to tiles
 _TILE_SIZE_DIV = const(4)                   # Number of bits to shift right by to divide by the Tile Size
 _TILE_SIZE_MOD_MASK = const(0xfffff0)       # Bitmask to get the modulo, x%TILE_SIZE => x&TILE_SIZE_MOD_MASK
-_TILE_SIZE_ALIGN_MASK = const(0x1f)         # Bitmask to subtract the modulo, basically aligns it to the TileSize*2
+
+_TILES_PER_VSCROLL_STRIPE = const(2)
+_VSCROLL_STRIPE_SIZE = const(TILE_SIZE*_TILES_PER_VSCROLL_STRIPE)
 
 
 _MAX_TILES_PER_DIM = const(16)
@@ -178,13 +180,9 @@ class DisplaySpec():
 
         if vscroll_stripe_size < 0:
             raise Exception("vscroll_stripe_size must not be negative")
-        vscroll_stripe_size &= _TILE_SIZE_ALIGN_MASK
-        if vscroll_stripe_size <= 0:
+        if vscroll_stripe_size < _VSCROLL_STRIPE_SIZE:
             if DIRECTION_UP in scroll_directions or DIRECTION_DOWN in scroll_directions:
                 raise Exception("Vertical Scrolling area is too small to implement scrolling, must specify allowed scrolling directions to not include UP or DOWN")
-            vscroll_stripe_size = 0
-
-        self.vscroll_stripe_size =  vscroll_stripe_size
 
         scroll_directions = frozenset(scroll_directions)
         for scd in scroll_directions:
@@ -630,10 +628,9 @@ class Component():
         self._state[k] = v
 
 
-_SC_VSTRIPE = const(0)
-_SC_WIDTH = const(1)
-_SC_HEIGHT = const(2)
-_SC_THEIGHT = const(3)
+_SC_WIDTH = const(0)
+_SC_HEIGHT = const(1)
+_SC_THEIGHT = const(2)
 
 class Screen():
     _8BIT_UNSIGNED_INT = _array_get_int_type(8, unsigned=True)
@@ -654,8 +651,7 @@ class Screen():
         tiled_width:int = display_spec.height>>_TILE_SIZE_DIV
         self.tiled_height = tiled_height
 
-        self._screen_info:memoryview = memoryview(array(self._32BIT_SIGNED_INT, bytearray(4*4)))
-        self._screen_info[_SC_VSTRIPE] = display_spec.vscroll_stripe_size
+        self._screen_info:memoryview = memoryview(array(self._32BIT_SIGNED_INT, bytearray(3*4)))
         self._screen_info[_SC_WIDTH] = display_spec.width
         self._screen_info[_SC_HEIGHT] = display_spec.height
         self._screen_info[_SC_THEIGHT] = tiled_height
@@ -868,7 +864,6 @@ class WatchGraphics():
 
         self.graphics_state:int = GraphicsState.Initial
         self.scroll_direction:int = DIRECTION_UP
-        self.vscroll_stripe_size:int = display.spec.vscroll_stripe_size
 
         self.width:int = self.display.spec.width
         self.height:int = self.display.spec.height
