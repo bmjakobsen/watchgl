@@ -1,7 +1,10 @@
+
 #!/usr/bin/env python3
 from array import array
 import math
 import fallback_font
+import builtins
+from time import ticks_ms, ticks_add, ticks_diff
 
 
 
@@ -10,6 +13,7 @@ import fallback_font
 # TODO: Rewrite draw565 to be a simple frontend to this library, as the size of the binary must be reduces, so the native and viper functions need to go
 # TODO: Implement Drawing and Switching of screens
 # TODO: For smooth scrolling it would be required to get the components of a screen efficiently, that overlap with a stripe on the screen.
+# 
 
 
 
@@ -38,7 +42,7 @@ except (ImportError, AttributeError):
 TILE_SIZE = const(16)                       # Size of tiles on the screen, all components must be aligned to tiles
 _TILE_SIZE_DIV = const(4)                   # Number of bits to shift right by to divide by the Tile Size
 _TILE_SIZE_MOD_MASK = const(0xfffff0)       # Bitmask to get the modulo, x%TILE_SIZE => x&TILE_SIZE_MOD_MASK
-_TILE_SIZE_ALIGN_MASK = const(0xf)          # Bitmask to subtract the modulo, basically aligns it to the Tile Size
+_TILE_SIZE_ALIGN_MASK = const(0x1f)         # Bitmask to subtract the modulo, basically aligns it to the TileSize*2
 
 
 _MAX_TILES_PER_DIM = const(16)
@@ -117,14 +121,6 @@ class ColorFormat():
     RGB565_R = 129
 
 # Enum
-class GraphicsState():
-    Initial = 1
-    Update = 2
-    Forced = 3
-    Scrolling = 4
-    ScrollingFinal = 5
-
-# Enum
 class Direction():
     UP = 0
     DOWN = 1
@@ -136,6 +132,30 @@ class Alignment():
     CENTER = 0
     LEFT = 1
     RIGHT = 2
+
+
+class ImageStream(Protocol):
+    width: int
+    height: int
+    # Reset Stream, or restart it
+    def reset(self):
+        pass
+    # Skip n Pixels
+    def skip_pixels(self, n:int):
+        pass
+    # Read n Pixels, into the buffer at the given offset, returns number of pixels read. Offset is in pixels
+    # The streams signals that it is emptry by returning a number smaller than the number of requested pixels
+    # The stream is never allowed to return less pixels than requested, while the stream has not reached its end
+
+    # A Reader can expect that a stream does not have too many pixels, or that the number of remaining pixels changes unless by the amount specified in skip_pixels or when reading_pixels
+
+    def read_pixels(self, buf:memoryview, n:int, offset:int) -> int:
+        return -1
+    # Get Remaining number of pixels, should only be used in a few cases, like ensuring the stream has enough pixels before starting to read it, as it can be slow.
+    def get_remaining(self) -> int:
+        return -1
+    def info(self) -> str:
+        return ""
 
 
 
@@ -186,30 +206,6 @@ class DisplaySpec():
         self.scroll_directions:frozenset[int] = scroll_directions
 
 
-class ImageStream(Protocol):
-    width: int
-    height: int
-    # Reset Stream, or restart it
-    def reset(self):
-        pass
-    # Skip n Pixels
-    def skip_pixels(self, n:int):
-        pass
-    # Read n Pixels, into the buffer at the given offset, returns number of pixels read. Offset is in pixels
-    # The streams signals that it is emptry by returning a number smaller than the number of requested pixels
-    # The stream is never allowed to return less pixels than requested, while the stream has not reached its end
-
-    # A Reader can expect that a stream does not have too many pixels, or that the number of remaining pixels changes unless by the amount specified in skip_pixels or when reading_pixels
-
-    def read_pixels(self, buf:memoryview, n:int, offset:int) -> int:
-        return -1
-    # Get Remaining number of pixels, should only be used in a few cases, like ensuring the stream has enough pixels before starting to read it, as it can be slow.
-    def get_remaining(self) -> int:
-        return -1
-    def info(self) -> str:
-        return ""
-
-
 
 
 class DisplayProtocol(Protocol):
@@ -232,17 +228,12 @@ class DisplayProtocol(Protocol):
 
 
 
-def _zero_generator(n:int):
-    n2 = n
-    while n2 > 0:
-        n2 -= 1
-        yield 0
-
 _SX_WIDTH = const(0)
 _SX_HEIGHT = const(1)
 _SX_REMAINING = const(2)
 
 
+# Image Stream used to wrap another image stream and crop it vertically, by specifiying the new reduced height, and the number of lines skipped at the start
 class VerticalCropStream():
     _32BIT_SIGNED_INT = _array_get_int_type(32, unsigned=False)
     def __init__(self, instream:ImageStream, skip:int, height:int):
@@ -250,10 +241,10 @@ class VerticalCropStream():
         self._setup(instream, skip, height)
     def _setup(self, instream:ImageStream, skip:int, height:int):
         self.width:int = instream.width
-        if height > instream.height:
-            raise Exception("Cropped height greater than source height")
+        if skip < 0:
+            raise Exception("Number of skipped lines must not be negative")
         if skip+height > instream.height:
-            height = height-(skip+height-instream.height)
+            raise Exception("Cropped height greater than source height")
         self.height:int = height
         self._instream:ImageStream = instream
 
@@ -304,6 +295,7 @@ _HCS_SKIP = const(3)
 _HCS_REM_IN_L = const(4)
 
 
+# Image Stream used to wrap another image stream and crop it horizontally, by specifiying the new reduced width, and the number of columns skipped at the start
 class HorizontalCropStream():
     _32BIT_SIGNED_INT = _array_get_int_type(32, unsigned=False)
     def __init__(self, instream:ImageStream, skip:int, width:int):
@@ -311,10 +303,10 @@ class HorizontalCropStream():
         self._setup(instream, skip, width)
     def _setup(self, instream:ImageStream, skip:int, width:int):
         self.height:int = instream.height
-        if width > instream.width:
+        if skip < 0:
+            raise Exception("Number of skipped columns must not be negative")
+        if skip.width > instream.width:
             raise Exception("Cropped width greater than source width")
-        if skip+width > instream.width:
-            width = width-(skip+width-instream.width)
         self.width:int = width
         self._instream:ImageStream = instream
         self._pixels_n:int = self.height*self.width
@@ -416,64 +408,6 @@ class HorizontalCropStream():
     def info(self) -> str:
         return "HORIZONTAL_CROP_STREAM("+str(self._skip_at_start)+", "+str(self.width)+", "+self._instream.info()+")"
 
-class StripedStream():
-    def __init__(self, instream:ImageStream, lines:int):
-        self._lines_per_stripe:int = lines
-        self._instream:ImageStream = instream
-
-        self.width:int = self._instream.width
-        self.height:int = 0
-        self._pixels_n:int = self.width*self._lines_per_stripe
-
-        self._stripe_start = 0
-
-        if (self._stripe_start + self._lines_per_stripe) > self._instream.height:
-            self.height = (self._stripe_start + self._lines_per_stripe) - self._instream.height
-            self._remaining = self.width*self.height
-        else:
-            self.height = self._lines_per_stripe
-            self._remaining = self._pixels_n
-        assert(self._instream.get_remaining() >= self._remaining)
-    def get_remaining(self) -> int:
-        return self._remaining
-    def reset(self):
-        self._stripe_start += self._lines_per_stripe
-        if self._stripe_start >= self._instream.height:
-            self._instream.reset()
-            self._stripe_start = 0
-            self.height = 0
-        if (self._stripe_start + self._lines_per_stripe) > self._instream.height:
-            self.height = (self._stripe_start + self._lines_per_stripe) - self._instream.height
-            self._remaining = self.width*self.height
-        else:
-            self.height = self._lines_per_stripe
-            self._remaining = self._pixels_n
-        assert(self._instream.get_remaining() >= self._remaining)
-    def skip_pixels(self, n:int):
-        remaining:int = self._remaining
-        if n > remaining:
-            n = remaining
-        if n <= 0:
-            return
-        skip_pixels = self._instream.skip_pixels
-        skip_pixels(n)
-        remaining -= n
-        self._remaining = remaining
-    def read_pixels(self, buf:memoryview, n:int, offset:int) -> int:
-        remaining:int = self._remaining
-        if n > remaining:
-            n = remaining
-        if n <= 0:
-            return 0
-        read_pixels = self._instream.read_pixels
-        r = read_pixels(buf, n, offset)
-        remaining -= r
-        self._remaining = remaining
-        return r
-    def info(self) -> str:
-        return "STRIPED_STREAM("+str(self.height)+", "+self._instream.info()+")"
-
-
 
 _DEFAULT_TEXT_FGCOLOR:int = const(0xFFFF)
 _PALETTE2_INITALIZER = [0, _DEFAULT_TEXT_FGCOLOR]
@@ -485,6 +419,7 @@ _MIS_REM_IN_L = const(5)
 _MIS_REM_IN_B = const(6)
 
 
+# Streamer for reading a memoryview (1 byte per element) as an uncompressed image, with one bit per pixel
 class MonoImageStream():
     _16BIT_UNSIGNED_INT = _array_get_int_type(16, unsigned=True)
     _32BIT_SIGNED_INT = _array_get_int_type(32, unsigned=False)
@@ -792,9 +727,14 @@ class Screen():
 
         update_array[0] |= 1<<byti
         update_array[byti] |= 1<<biti
+
+
     @micropython.viper
-    def draw(self, display):
+    def draw_lazy(self, wg):
         update_array:ptr16 = ptr16(self.update_array)
+        set_com_context = self._set_component_context
+        builtin_false = builtins.bool(False)
+
         # Use Pointers to set value
         update_bitfield:int = update_array[0]
         if update_bitfield == 0:
@@ -828,10 +768,27 @@ class Screen():
                     continue
                 cid = id_block_off+id_sub
                 com = self.components[cid]
+                set_component_context(com.x, com.y, com.width, com.height, 0)
                 com_draw = com.draw
-                com_draw(com, display)
+                com_draw(com, wg)
+                com.dirty = builtin_false
         update_array[0] = 0
 
+
+    @micropython.viper
+    def draw_full(self, wg):
+        update_array:ptr16 = ptr16(self.update_array)
+        set_com_context = self._set_component_context
+
+        n2:int = 0
+        while n2 < 9:
+            update_array[n2] = 0
+        builtin_false = builtins.bool(False)
+        for com in self.components:
+            set_component_context(com.x, com.y, com.width, com.height, 0)
+            com_draw = com.draw
+            com_draw(com, wg)
+            com.dirty = builtin_false
 
 
 
@@ -920,22 +877,18 @@ class WatchGraphics():
         if gc_collect:
             _gc_collect()
 
-    def _set_bgcolor(self, bgcolor:int):
+    def _set_screen_context(self, bgcolor:int):
         self.bgcolor = bgcolor
-        tbgcolor:int = self._text_bgcolor
-        if tbgcolor != bgcolor or self._text_bgcolor_modified:
+        self._set_component_context(0, 0, self.display.spec.width, self.display.spec.height, 0)
+
+    def _set_component_context(self, x:int, y:int, width:int, height:int, shift_y:int):
+        self.width = width
+        self.height = height
+        bgcolor:int = self.bgcolor
+        if self._text_bgcolor != bgcolor or self._text_bgcolor_modified:
             self._text_bgcolor = bgcolor
             self._text_bgcolor_modified = False
             self._font.set_bgcolor(bgcolor)
-
-    def _set_window(self, x:int, y:int, width:int, height:int, shift_y:int):
-        self.width = width
-        self.height = height
-        if self._text_bgcolor_modified:
-            tbgcolor:int = self.bgcolor
-            self._text_bgcolor = tbgcolor
-            self._text_bgcolor_modified = False
-            self._font.set_bgcolor(tbgcolor)
 
         # Setup window info
         self._window_info[_WGWI_WIDTH] = self.width
@@ -944,6 +897,13 @@ class WatchGraphics():
         self._window_info[_WGWI_YPOS] = y
         self._window_info[_WGWI_YSHIFT] = shift_y
 
+
+
+
+
+
+
+    # Set the background color of text, will be reset to the background color after switching components
     def set_text_bgcolor(self, bgcolor:int):
         old_tbgcolor:int = self._text_bgcolor
         if old_tbgcolor != bgcolor:
@@ -951,6 +911,7 @@ class WatchGraphics():
             self._text_bgcolor_modified = True
             self._font.set_bgcolor(bgcolor)
 
+    # Bit image to the screen at position, will automatically be cropped if it goes out of bounds
     @micropython.viper
     def blit(self, image, x:int, y:int):
         window_info:ptr32 = ptr32(self._window_info)
@@ -1000,6 +961,8 @@ class WatchGraphics():
         self.display.wgl_blit(image, window_info[_WGWI_XPOS]+x, window_info[_WGWI_YPOS]+y)
         image.reset()
 
+
+    # Fill an area on the screen, will automatically be cropped to not leave the specified component
     @micropython.viper
     def fill(self, color:int, x:int, y:int, width:int, height:int):
         window_info:ptr32 = ptr32(self._window_info)
@@ -1173,6 +1136,7 @@ class WatchGraphics():
             wgl_fill(color, wxpos+fill_x, wypos+fill_y, fill_w, fill_h)
 
 
+    # Draw a line using polar coordinates
     @micropython.native
     def draw_line_polar(self, color:int, x:int, y:int, theta:int, r0:int, r1:int, width:int):
         theta2:float = theta*_C_TO_RADIANS
@@ -1185,7 +1149,7 @@ class WatchGraphics():
         self.draw_line(x0, y0, x1, y1, width, color)
 
 
-    # Returns a tuple of integers
+    # Get bounding box of a string drawn on the screen
     @micropython.native
     def string_bounding_box(self, s:str) -> tuple[int, int]:
         font:_LegacyFontWrapper = self._font
@@ -1202,6 +1166,7 @@ class WatchGraphics():
 
 
 
+    # Draw string to the screen at position, sadly cant be viper as it doesnt
     @micropython.native
     def draw_string(self, color:int, s:str, x:int, y:int):
         window_width:int = self.width
@@ -1297,10 +1262,7 @@ if __name__ == '__main__':
 
     img = DummyImageStream(240, 240)
     img2 = DummyImageStream(10, 10)
-    img3 = StripedStream(DummyImageStream(240, 240), 20)
 
     dg.blit(img, 10, 10)
     dg.blit(img2, 10, 10)
     dg.blit(img2, 239, 239)
-    for i in range(0, 240, 20):
-        dg.blit(img3, 0, i)
