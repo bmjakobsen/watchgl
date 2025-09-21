@@ -114,24 +114,18 @@ def _array_get_int_type(n:int, unsigned:bool=False) -> str:
 
 
 
+COLORFORMAT_RGB565 = const(128)
+COLORFORMAT_RGB565_R = const(129)
 
-# Enum
-class ColorFormat():
-    RGB565 = 128
-    RGB565_R = 129
 
-# Enum
-class Direction():
-    UP = 0
-    DOWN = 1
-    LEFT = 2
-    RIGHT = 3
+DIRECTION_UP = const(0)
+DIRECTION_DOWN = const(1)
+DIRECTION_LEFT = const(2)
+DIRECTION_RIGHT = const(3)
 
-# Enum
-class Alignment():
-    CENTER = 0
-    LEFT = 1
-    RIGHT = 2
+ALIGNMENT_CENTER = const(0)
+ALIGNMENT_LEFT = const(1)
+ALIGNMENT_RIGHT = const(2)
 
 
 class ImageStream(Protocol):
@@ -160,8 +154,8 @@ class ImageStream(Protocol):
 
 
 class DisplaySpec():
-    _SUPPORTED_SCROLLS = set([Direction.UP, Direction.DOWN])
-    def __init__(self, width:int, height:int, color_format:int, scroll_directions:frozenset[int]=frozenset([Direction.UP, Direction.DOWN]), vscroll_stripe_size:int=TILE_SIZE, hscroll_stripe_size:int=0):
+    _SUPPORTED_SCROLLS = set([DIRECTION_UP, DIRECTION_DOWN])
+    def __init__(self, width:int, height:int, color_format:int, scroll_directions:frozenset[int]=frozenset([DIRECTION_UP, DIRECTION_DOWN]), vscroll_stripe_size:int=TILE_SIZE, hscroll_stripe_size:int=0):
         self.width:int = width
         self.height:int = height
         self.color_format:int = color_format
@@ -186,7 +180,7 @@ class DisplaySpec():
             raise Exception("vscroll_stripe_size must not be negative")
         vscroll_stripe_size &= _TILE_SIZE_ALIGN_MASK
         if vscroll_stripe_size <= 0:
-            if Direction.UP in scroll_directions or Direction.DOWN in scroll_directions:
+            if DIRECTION_UP in scroll_directions or DIRECTION_DOWN in scroll_directions:
                 raise Exception("Vertical Scrolling area is too small to implement scrolling, must specify allowed scrolling directions to not include UP or DOWN")
             vscroll_stripe_size = 0
 
@@ -194,9 +188,9 @@ class DisplaySpec():
 
         scroll_directions = frozenset(scroll_directions)
         for scd in scroll_directions:
-            if scd == Direction.UP:
+            if scd == DIRECTION_UP:
                 continue
-            if scd == Direction.DOWN:
+            if scd == DIRECTION_DOWN:
                 continue
             raise Exception("Unsupported Scroll Direction used")
 
@@ -466,9 +460,9 @@ class MonoImageStream():
             raise Exception("Negative Color given")
         color &= 0xFFFF
         cf:int = self._color_format
-        if cf == ColorFormat.RGB565:
+        if cf == COLORFORMAT_RGB565:
             self._palette[n] = color
-        elif cf == ColorFormat.RGB565_R:
+        elif cf == COLORFORMAT_RGB565_R:
             color2:int = (color>>8)&0xFF
             color = (color<<8)&0xFF00
             self._palette[n] = color | color2
@@ -636,10 +630,15 @@ class Component():
         self._state[k] = v
 
 
+_SC_VSTRIPE = const(0)
+_SC_WIDTH = const(1)
+_SC_HEIGHT = const(2)
+_SC_THEIGHT = const(3)
 
 class Screen():
     _8BIT_UNSIGNED_INT = _array_get_int_type(8, unsigned=True)
     _16BIT_UNSIGNED_INT = _array_get_int_type(16, unsigned=True)
+    _32BIT_SIGNED_INT = _array_get_int_type(32, unsigned=False)
 
 
     _CREATION_OVERLAP_BITMASK:memoryview = memoryview(array(_16BIT_UNSIGNED_INT, bytearray(_MAX_TILES_PER_DIM*4)))
@@ -654,6 +653,12 @@ class Screen():
         tiled_height:int = display_spec.width>>_TILE_SIZE_DIV
         tiled_width:int = display_spec.height>>_TILE_SIZE_DIV
         self.tiled_height = tiled_height
+
+        self._screen_info:memoryview = memoryview(array(self._32BIT_SIGNED_INT, bytearray(4*4)))
+        self._screen_info[_SC_VSTRIPE] = display_spec.vscroll_stripe_size
+        self._screen_info[_SC_WIDTH] = display_spec.width
+        self._screen_info[_SC_HEIGHT] = display_spec.height
+        self._screen_info[_SC_THEIGHT] = tiled_height
 
         assert(tiled_height <= _MAX_TILES_PER_DIM and tiled_width <= _MAX_TILES_PER_DIM)
 
@@ -790,6 +795,15 @@ class Screen():
             com_draw(com, wg)
             com.dirty = builtin_false
 
+    @micropython.viper
+    def draw_scroll(self, wg, scroll_direction:int):
+        if scroll_direction != DIRECTION_UP and scroll_direction != DIRECTION_DOWN:
+            raise Exception("Invalid Direction given")
+        window_info:ptr32 = ptr32(self._screen_info)
+        vstripe:int = window_info[_SC_VSTRIPE]
+        height:int = window_info[_SC_HEIGHT]
+        tiled_height:int = window_info[_SC_THEIGHT]
+        fo
 
 
 
@@ -853,7 +867,7 @@ class WatchGraphics():
         self._text_bgcolor_modified:bool = True
 
         self.graphics_state:int = GraphicsState.Initial
-        self.scroll_direction:int = Direction.UP
+        self.scroll_direction:int = DIRECTION_UP
         self.vscroll_stripe_size:int = display.spec.vscroll_stripe_size
 
         self.width:int = self.display.spec.width
@@ -1196,12 +1210,12 @@ class WatchGraphics():
     def draw_string_a(self, color:int, s:str, x:int, y:int, align:Alignment):
         (rw, rh) = self.string_bounding_box(s)
         rwidth:int = int(rw)
-        if align == Alignment.CENTER:
+        if align == ALIGNMENT_CENTER:
             offset:int = (rwidth>>1)
             self.draw_string(color, s, x-offset, y)
-        elif align == Alignment.LEFT:
+        elif align == ALIGNMENT_LEFT:
             self.draw_string(color, s, x, y)
-        elif align == Alignment.RIGHT:
+        elif align == ALIGNMENT_RIGHT:
             self.draw_string(color, s, x-rwidth, y)
         else:
             raise Exception("Shouldnt Happen")
@@ -1210,9 +1224,9 @@ class WatchGraphics():
 
 
 
-_DUMMY_SCREEN:Screen = Screen(0, DisplaySpec(0, 0, ColorFormat.RGB565, scroll_directions=frozenset([])), [])
+_DUMMY_SCREEN:Screen = Screen(0, DisplaySpec(0, 0, COLORFORMAT_RGB565, scroll_directions=frozenset([])), [])
 class DummyDisplay(DisplayProtocol):
-    def __init__(self, width:int, height:int, color_format:int=ColorFormat.RGB565):
+    def __init__(self, width:int, height:int, color_format:int=COLORFORMAT_RGB565):
         self.spec = DisplaySpec(width, height, color_format, scroll_directions=frozenset([]))
     def wgl_vscroll(self, pixels:int):
         pass
